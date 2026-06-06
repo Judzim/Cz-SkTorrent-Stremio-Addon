@@ -1177,7 +1177,7 @@ app.get('/:config/stream/:type/:id.json', async (req, res) => {
             } while (rawName !== prev);
 
             for (const nazov of unikatneNazvy) {
-                const hl = odstranDiakritiku(nazov.toLowerCase()).trim();
+                const hl = odstranDiakritiku(nazov.toLowerCase()).trim().replace(/[^a-z0-9]+$/i, '');
                 if (!hl) continue;
                 const escaped = hl.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
                 if (new RegExp(`\\b${escaped}\\b`, "i").test(rawName)) return true;
