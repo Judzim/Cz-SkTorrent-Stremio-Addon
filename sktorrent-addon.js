@@ -855,7 +855,8 @@ if (videoSubory.length === 1) {
         sktId: t.id, 
         fileName: cistyNazovSuboru,
         infoHash: torrentData.infoHash,
-        fileIdx: najdenyIndex === -1 ? 0 : najdenyIndex
+        fileIdx: najdenyIndex === -1 ? 0 : najdenyIndex,
+        sktLang: langMatch.length > 0 ? [...new Set(langMatch.map(l => l.toUpperCase()))].join(",") : ""
     };
 
     return streamObj;
@@ -963,6 +964,10 @@ app.get(['/', '/configure', '/:config/configure'], (req, res) => {
                 <input type="checkbox" id="showUncached" ${getCheck('showUncached', true)}> Zobraziť nenastiahnuté (Uncached ⏳)
             </label>
 
+            <label class="checkbox-label">
+                <input type="checkbox" id="preferCzSk" ${getCheck('preferCzSk', false)}> Preferovať SK/CZ dabing 🇸🇰🇨🇿
+            </label>
+
             <label>Zoradenie podľa veľkosti:</label>
             <select id="sizeOrder">
                 <option value="desc" ${getSelect('sizeOrder', 'desc', 'desc')}>Najväčšie prvé (Odporúčané)</option>
@@ -1011,6 +1016,7 @@ app.get(['/', '/configure', '/:config/configure'], (req, res) => {
                     tvdb: document.getElementById('tvdb').value,
                     tmdb: document.getElementById('tmdb').value,
                     showUncached: document.getElementById('showUncached').checked,
+                    preferCzSk: document.getElementById('preferCzSk').checked,
                     sizeOrder: document.getElementById('sizeOrder').value,
                     qualityOrder: uniqueQArray,
                     cb: Date.now()
@@ -1303,7 +1309,8 @@ app.get('/:config/stream/:type/:id.json', async (req, res) => {
 
                 _sortCached: jeCached ? 1 : 0,
                 _sortQuality: getQualityRank(sortText),
-                _sortSize: getSizeBytes(sortText)
+                _sortSize: getSizeBytes(sortText),
+                _sortLang: stream.sktLang && /SK|CZ/i.test(stream.sktLang) ? 1 : 0
             };
 
             if (jeCached) {
@@ -1324,9 +1331,16 @@ app.get('/:config/stream/:type/:id.json', async (req, res) => {
         const defaultQualityOrder = [4, 3, 2, 1, 0];
         const qualityOrder = userConfig.qualityOrder || defaultQualityOrder;
 
+        const preferCzSk = userConfig.preferCzSk === true;
+
         streamy = streamy.sort((a, b) => {
             if (b._sortCached !== a._sortCached) {
                 return b._sortCached - a._sortCached;
+            }
+
+            // SK/CZ language preference
+            if (preferCzSk && b._sortLang !== a._sortLang) {
+                return b._sortLang - a._sortLang;
             }
 
             const indexA = qualityOrder.indexOf(a._sortQuality);
@@ -1346,7 +1360,7 @@ app.get('/:config/stream/:type/:id.json', async (req, res) => {
             }
         });
 
-        streamy = streamy.map(({ _sortCached, _sortQuality, _sortSize, ...rest }) => rest);
+        streamy = streamy.map(({ _sortCached, _sortQuality, _sortSize, _sortLang, ...rest }) => rest);
 
         logSuccess(`TorBox stream formatting complete. Cached: ${streamy.filter(s => s.name.includes("⚡")).length}, Uncached: ${streamy.filter(s => s.name.includes("⏳")).length}`);
 
