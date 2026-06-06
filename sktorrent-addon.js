@@ -425,7 +425,7 @@ async function pridajTvdbNazvy(nazvy, tvdbId, tvdbKey) {
     }
 }
 
-async function ziskatVsetkyNazvyARok(imdbId, vlastnyTyp, tmdbKey) {
+async function ziskatVsetkyNazvyARok(imdbId, vlastnyTyp, tmdbKey, tvdbKey) {
     return withCache(`names_year_v2:${imdbId}`, 21600000, async () => { 
         logApi(`Fetching metadata pre IMDB ID: ${imdbId} (${vlastnyTyp})`);
         const nazvy = new Set();
@@ -508,13 +508,14 @@ async function ziskatVsetkyNazvyARok(imdbId, vlastnyTyp, tmdbKey) {
         }
 
         // ── TVDB fallback: získať slovenský/český názov ak TMDB nevrátil ──
-        if (vlastnyTyp === "series" && tmdbId && TVDB_API_KEY) {
+        const pouzityTvdbKey = tvdbKey || TVDB_API_KEY;
+        if (vlastnyTyp === "series" && tmdbId && pouzityTvdbKey) {
             try {
                 const extRes = await axios.get(`https://api.themoviedb.org/3/tv/${tmdbId}/external_ids`, { params: { api_key: tmdbKey }, timeout: 4000 });
                 const tvdbId = extRes.data?.tvdb_id;
                 if (tvdbId) {
                     logApi(`TVDB fallback for TMDB ID ${tmdbId} → TVDB ID ${tvdbId}`);
-                    await pridajTvdbNazvy(nazvy, tvdbId, TVDB_API_KEY);
+                    await pridajTvdbNazvy(nazvy, tvdbId, pouzityTvdbKey);
                 }
             } catch (e) { logWarn(`TVDB fallback failed for TMDB ${tmdbId}`); }
         }
@@ -949,6 +950,9 @@ app.get(['/', '/configure', '/:config/configure'], (req, res) => {
             <label>TorBox API Key (Odporúčané)</label>
             <input type="text" id="torbox" placeholder="TorBox token" value="${getVal('torbox')}">
             
+            <label>TVDB API Key (Voliteľné — SK/CZ názvy seriálov)</label>
+            <input type="text" id="tvdb" placeholder="TVDB token" value="${getVal('tvdb')}">
+            
             <label>TMDB API Key (Voliteľné)</label>
             <input type="text" id="tmdb" placeholder="TMDB token" value="${getVal('tmdb')}">
             
@@ -1004,6 +1008,7 @@ app.get(['/', '/configure', '/:config/configure'], (req, res) => {
                     uid: document.getElementById('uid').value,
                     pass: document.getElementById('pass').value,
                     torbox: document.getElementById('torbox').value,
+                    tvdb: document.getElementById('tvdb').value,
                     tmdb: document.getElementById('tmdb').value,
                     showUncached: document.getElementById('showUncached').checked,
                     sizeOrder: document.getElementById('sizeOrder').value,
@@ -1103,13 +1108,14 @@ app.get('/:config/stream/:type/:id.json', async (req, res) => {
     const activePass = userConfig?.password || userConfig?.pass;
     const activeTorbox = userConfig?.tb_key || userConfig?.torbox;
     const activeTmdb = userConfig?.tm_key || userConfig?.tmdb;
+    const activeTvdb = userConfig?.tvdb;
 
     if (!activeUid || !activePass) {
         logWarn(`Stream request denied - Invalid or missing config.`);
         return res.json({ streams: [], error: "Neplatná konfigurácia." });
     }
     
-    const normalizedConfig = { uid: activeUid, pass: activePass, torbox: activeTorbox, tmdb: activeTmdb };
+    const normalizedConfig = { uid: activeUid, pass: activePass, torbox: activeTorbox, tmdb: activeTmdb, tvdb: activeTvdb };
     const userAxios = getFastAxios(normalizedConfig);
     console.log(`\n====== 🎬 Hľadám pre UID: ${normalizedConfig.uid} | id='${id}' ======`);
 
@@ -1120,7 +1126,7 @@ app.get('/:config/stream/:type/:id.json', async (req, res) => {
     const vlastnyTyp = jeToSerialPodlaId ? "series" : "movie";
 
     // 1. ZÍSKAME NÁZVY A ROK a META
-    const metaData = await ziskatVsetkyNazvyARok(imdbId, vlastnyTyp, userConfig.tmdb);
+    const metaData = await ziskatVsetkyNazvyARok(imdbId, vlastnyTyp, userConfig.tmdb, userConfig.tvdb);
     const suroveNazvy = metaData?.nazvy || [];
     const vydanyRok = metaData?.rok;
     const metaInfo = metaData?.meta;
