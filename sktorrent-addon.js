@@ -1093,9 +1093,8 @@ app.get('/:config/stream/:type/:id.json', async (req, res) => {
         const hlavnyNazov = metaData?.meta?.titleOriginal || unikatneNazvy[0];
         const csfdLink = await ziskatCsfdUrl(imdbId, hlavnyNazov, vydanyRok, vlastnyTyp);
     
-    if (csfdLink) {
-        dotazy.add(csfdLink); 
-    }
+    // ČSFD link je len pre informáciu, nepridávame ho do vyhľadávacích dotazov
+    // (sKtorrent by s URL nič nenašiel)
 
     // 3. Fallback na klasické textové hľadanie
     unikatneNazvy.forEach(zaklad => {
@@ -1167,7 +1166,7 @@ app.get('/:config/stream/:type/:id.json', async (req, res) => {
         const predNameFiltrom = torrenty.length;
         torrenty = torrenty.filter(t => {
             let rawName = odstranDiakritiku(t.name.toLowerCase()).replace(/^stiahni si\s*/i, "").trim();
-            const prefixRe = /^(?:filmy|film|serialy|serial|seriál|seria|serie|dokumenty|dokument|tv|kreslene|kreslené|anime)\b/i;
+            const prefixRe = /^(?:filmy|film|serialy|serial|seriál|seria|serie|dokumenty|dokument|tv|kreslene|kreslené|anime|pořad|porad)\b/i;
             const junkRe = /^(?:\s+|[-–_|/]+|\[[^\]]*]|\([^)]+\)|1080p|720p|2160p|4k|hdr|web[-\s]?dl|webrip|brrip|bluray|dvdrip|tvrip|cz|sk|en)\b/i;
             
             let prev;
@@ -1181,7 +1180,7 @@ app.get('/:config/stream/:type/:id.json', async (req, res) => {
                 const hl = odstranDiakritiku(nazov.toLowerCase()).trim();
                 if (!hl) continue;
                 const escaped = hl.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-                if (new RegExp(`^${escaped}\\b`, "i").test(rawName)) return true;
+                if (new RegExp(`\\b${escaped}\\b`, "i").test(rawName)) return true;
             }
             return false;
         });
