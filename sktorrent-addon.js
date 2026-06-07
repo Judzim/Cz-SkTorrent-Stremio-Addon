@@ -797,11 +797,14 @@ if (videoSubory.length === 1) {
     const vlajkyList = langMatch.map(kod => langToFlag[kod.toUpperCase()]).filter(Boolean);
     const unikatneVlajky = [...new Set(vlajkyList)];
     let jazykText = "Neznámy jazyk";
+    let jeSKCZ = false;
     if (unikatneVlajky.length > 0) {
         jazykText = unikatneVlajky.join(" / ");
+        jeSKCZ = langMatch.some(l => /^(CZ|SK)$/i.test(l));
     } else if (langMatch.length > 0) {
         const textoveJazyky = [...new Set(langMatch.map(l => l.toUpperCase()))];
         jazykText = textoveJazyky.join(" / ");
+        jeSKCZ = langMatch.some(l => /^(CZ|SK)$/i.test(l));
     }
 
     // Získanie počtu seedov (t.seeds je dostupné z tvojho vyhľadávacieho scrapera)
@@ -851,10 +854,11 @@ if (videoSubory.length === 1) {
         behaviorHints: { 
             bingeGroup: `sktorrent-${kvality.length > 0 ? kvality.join("-").replace(/\s/g, "") : "standard"}`
         },
-        sktId: t.id, 
+        sktId: t.id,
         fileName: cistyNazovSuboru,
         infoHash: torrentData.infoHash,
-        fileIdx: najdenyIndex === -1 ? 0 : najdenyIndex
+        fileIdx: najdenyIndex === -1 ? 0 : najdenyIndex,
+        isDub: jeSKCZ
     };
 
     return streamObj;
@@ -962,6 +966,9 @@ app.get(['/', '/configure', '/:config/configure'], (req, res) => {
                 <input type="checkbox" id="showUncached" ${getCheck('showUncached', true)}> Zobraziť nenastiahnuté (Uncached ⏳)
             </label>
 
+            <label class="checkbox-label">
+                <input type="checkbox" id="preferDub" ${getCheck('preferDub', false)}> Preferovať SK/CZ dabing 🇸🇰🇨🇿
+
             <label>Zoradenie podľa veľkosti:</label>
             <select id="sizeOrder">
                 <option value="desc" ${getSelect('sizeOrder', 'desc', 'desc')}>Najväčšie prvé (Odporúčané)</option>
@@ -1009,6 +1016,7 @@ app.get(['/', '/configure', '/:config/configure'], (req, res) => {
                     torbox: document.getElementById('torbox').value,
                     tmdb: document.getElementById('tmdb').value,
                     tvdb: document.getElementById('tvdb').value,
+                    preferDub: document.getElementById('preferDub').checked,
                     showUncached: document.getElementById('showUncached').checked,
                     sizeOrder: document.getElementById('sizeOrder').value,
                     qualityOrder: uniqueQArray,
@@ -1107,13 +1115,14 @@ app.get('/:config/stream/:type/:id.json', async (req, res) => {
     const activePass = userConfig?.password || userConfig?.pass;
     const activeTorbox = userConfig?.tb_key || userConfig?.torbox;
     const activeTmdb = userConfig?.tm_key || userConfig?.tmdb;
+    const activePreferDub = userConfig?.preferDub === true;
 
     if (!activeUid || !activePass) {
         logWarn(`Stream request denied - Invalid or missing config.`);
         return res.json({ streams: [], error: "Neplatná konfigurácia." });
     }
     
-    const normalizedConfig = { uid: activeUid, pass: activePass, torbox: activeTorbox, tmdb: activeTmdb, tvdb: userConfig.tvdb };
+    const normalizedConfig = { uid: activeUid, pass: activePass, torbox: activeTorbox, tmdb: activeTmdb, tvdb: userConfig.tvdb, preferDub: activePreferDub };
     const userAxios = getFastAxios(normalizedConfig);
     console.log(`\n====== 🎬 Hľadám pre UID: ${normalizedConfig.uid} | id='${id}' ======`);
 
@@ -1301,6 +1310,7 @@ app.get('/:config/stream/:type/:id.json', async (req, res) => {
                 behaviorHints: stream.behaviorHints,
 
                 _sortCached: jeCached ? 1 : 0,
+                _sortDub: stream.isDub ? 1 : 0,
                 _sortQuality: getQualityRank(sortText),
                 _sortSize: getSizeBytes(sortText)
             };
@@ -1328,6 +1338,11 @@ app.get('/:config/stream/:type/:id.json', async (req, res) => {
                 return b._sortCached - a._sortCached;
             }
 
+            // Preferovať SK/CZ dabing ak je toggle zapnutý
+            if (userConfig.preferDub && b._sortDub !== a._sortDub) {
+                return b._sortDub - a._sortDub;
+            }
+
             const indexA = qualityOrder.indexOf(a._sortQuality);
             const indexB = qualityOrder.indexOf(b._sortQuality);
             
@@ -1345,7 +1360,7 @@ app.get('/:config/stream/:type/:id.json', async (req, res) => {
             }
         });
 
-        streamy = streamy.map(({ _sortCached, _sortQuality, _sortSize, ...rest }) => rest);
+        streamy = streamy.map(({ _sortCached, _sortDub, _sortQuality, _sortSize, ...rest }) => rest);
 
         logSuccess(`TorBox stream formatting complete. Cached: ${streamy.filter(s => s.name.includes("⚡")).length}, Uncached: ${streamy.filter(s => s.name.includes("⏳")).length}`);
 
