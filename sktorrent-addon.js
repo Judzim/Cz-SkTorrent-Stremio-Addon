@@ -18,6 +18,7 @@ const PORT = process.env.PORT || 7000;
 const PUBLIC_URL = process.env.PUBLIC_URL || `http://localhost:${PORT}`; 
 const BASE_URL = "https://sktorrent.eu"; 
 const SEARCH_URL = `${BASE_URL}/torrent/torrents_v2.php`;
+const TVDB_API_KEY = "d786995d-7841-4640-a4a5-8d30592d1651";
 
 const agentOptions = { keepAlive: true, maxSockets: 50 };
 
@@ -385,6 +386,45 @@ function parseYearRange(y) {
     return { yearStart: m[1] ? parseInt(m[1]) : null, yearEnd: m[2] ? parseInt(m[2]) : null };
 }
 
+// ── TVDB global token cache ──────────────────────────────────────────────
+let tvdbTokenCache = { token: null, expiresAt: 0 };
+
+async function getTvdbToken(tvdbKey) {
+    if (tvdbKey && tvdbTokenCache.token && Date.now() < tvdbTokenCache.expiresAt - 60000) {
+        return tvdbTokenCache.token;
+    }
+    try {
+        const res = await axios.post("https://api4.thetvdb.com/v4/login", { apikey: tvdbKey }, { timeout: 5000 });
+        const data = res.data?.data;
+        if (data?.token) {
+            tvdbTokenCache.token = data.token;
+            tvdbTokenCache.expiresAt = Date.now() + 3600000; // 1h default
+            logSuccess(`TVDB token obtained`);
+            return data.token;
+        }
+    } catch (e) { logError("TVDB login failed", e); }
+    return null;
+}
+
+async function pridajTvdbNazvy(nazvy, tvdbId, tvdbKey) {
+    const token = await getTvdbToken(tvdbKey);
+    if (!token) return;
+    
+    for (const lang of ["slk", "ces", "eng"]) {
+        try {
+            const res = await axios.get(`https://api4.thetvdb.com/v4/series/${tvdbId}/translations/${lang}`, {
+                headers: { "Authorization": `Bearer ${token}` },
+                timeout: 4000
+            });
+            const name = res.data?.data?.name;
+            if (name && name.trim()) {
+                nazvy.add(name.trim());
+                logApi(`TVDB (${lang}): ${name.trim()}`);
+            }
+        } catch (e) { /* translation not found for this lang, skip */ }
+    }
+}
+
 async function ziskatVsetkyNazvyARok(imdbId, vlastnyTyp, tmdbKey) {
     return withCache(`names_year_v2:${imdbId}`, 21600000, async () => { 
         logApi(`Fetching metadata pre IMDB ID: ${imdbId} (${vlastnyTyp})`);
@@ -465,6 +505,18 @@ async function ziskatVsetkyNazvyARok(imdbId, vlastnyTyp, tmdbKey) {
                     });
                 }
             } catch (e) { /* ignore */ }
+        }
+
+        // ── TVDB fallback: získať slovenský/český názov ──
+        if (vlastnyTyp === "series" && tmdbId && TVDB_API_KEY) {
+            try {
+                const extRes = await axios.get(`https://api.themoviedb.org/3/tv/${tmdbId}/external_ids`, { params: { api_key: tmdbKey }, timeout: 4000 });
+                const tvdbId = extRes.data?.tvdb_id;
+                if (tvdbId) {
+                    logApi(`TVDB fallback pre TMDB ID ${tmdbId} → TVDB ID ${tvdbId}`);
+                    await pridajTvdbNazvy(nazvy, tvdbId, TVDB_API_KEY);
+                }
+            } catch (e) { logWarn(`TVDB fallback failed pre TMDB ${tmdbId}`); }
         }
 
         if (!titleOriginal) titleOriginal = titleCz; 
