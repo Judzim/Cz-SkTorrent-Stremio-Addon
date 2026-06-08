@@ -1686,6 +1686,9 @@ app.get(['/configure', '/:config/configure'], (req, res) => {
 
                     document.getElementById('result-box').style.display = 'block';
                     document.getElementById('generated-url').value = finalHttpUrl;
+                    setTimeout(function() {
+                        document.getElementById('result-box').scrollIntoView({ behavior: 'smooth', block: 'center' });
+                    }, 100);
                 } catch (error) {
                     alert(t('alert.codeError'));
                     console.error(error);
