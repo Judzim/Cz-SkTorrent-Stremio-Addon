@@ -60,7 +60,7 @@ Pri zapnutom debrid providerovi (TorBox / Real-Debrid) majú streamy v Stremiu p
 | `[⏳]` | **Necachovaný** — torrent sa práve sťahuje na servery; prehratie sa spustí po dokončení |
 | `[❌]` | **Blokovaný** (iba Real-Debrid) — Real-Debrid blokuje názvy obsahujúce určité reťazce (napr. `BDRip`, `WEB-DL`, `RARBG`, `YTS`). Tieto streamy sa nedajú prehrať cez RD a sú automaticky presunuté na koniec radenia |
 
-Každý používateľ má vlastný API kľúč, ale cache status (⚡/⏳) je globálny — ak jeden človek stiahne torrent na RD servery, nabudúce ho uvidia všetci ako cachovaný.
+Cache status kontrolujeme cez **StremThru proxy** — batch request na RD API (`GET /magnets/check`). Problém: StremThru DHT nie je 100% spoľahlivý, niekedy vráti `"unknown"` (⏳) aj keď torrent na RD serveroch reálne je. Vtedy ho play handler pošle do RD, ktorý ho nájde a streamuje — na druhý krát už cache check vráti `"cached"` (⚡). Cache status je globálny, nie viazaný na konkrétny API kľúč.
 
 ---
 
