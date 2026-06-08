@@ -1019,7 +1019,8 @@ if (videoSubory.length === 1) {
 // VLASTNÝ EXPRESS SERVER BEZ `getRouter` Z SDK
 // ===================================================================
 const app = express();
-app.use(cors()); 
+app.use(cors());
+app.use(express.json()); 
 
 app.use((req, res, next) => {
     console.log(`\n======================================================`);
@@ -1029,6 +1030,49 @@ app.use((req, res, next) => {
 });
 
 // --- Web UI ---
+// --- API: SKTorrent Login Proxy ---
+app.post('/api/sktorrent-login', async (req, res) => {
+    const { username, password } = req.body;
+    if (!username || !password) {
+        return res.status(400).json({ error: 'Chýba meno alebo heslo' });
+    }
+    try {
+        const loginRes = await axios({
+            method: 'post',
+            url: 'https://sktorrent.eu/torrent/login.php',
+            data: `uid=${encodeURIComponent(username)}&pwd=${encodeURIComponent(password)}`,
+            headers: {
+                'Content-Type': 'application/x-www-form-urlencoded',
+                'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36',
+                'Origin': 'https://sktorrent.eu',
+                'Referer': 'https://sktorrent.eu/torrent/'
+            },
+            maxRedirects: 0,
+            validateStatus: status => status >= 200 && status < 400
+        });
+
+        const setCookie = loginRes.headers['set-cookie'];
+        if (!setCookie || !Array.isArray(setCookie) || setCookie.length === 0) {
+            return res.status(401).json({ error: 'Nesprávne meno alebo heslo' });
+        }
+
+        let uid = '', pass = '';
+        for (const cookie of setCookie) {
+            if (cookie.startsWith('uid=')) uid = cookie.split(';')[0].substring(4);
+            if (cookie.startsWith('pass=')) pass = cookie.split(';')[0].substring(5);
+        }
+
+        if (!uid || !pass) {
+            return res.status(401).json({ error: 'Nesprávne meno alebo heslo' });
+        }
+
+        logSuccess(`SKTorrent login OK: ${username} (UID: ${uid})`);
+        res.json({ uid, pass, username });
+    } catch (error) {
+        logError('SKTorrent login proxy error', error);
+        res.status(500).json({ error: 'Chyba pri prihlasovaní k SKTorrent' });
+    }
+});
 app.get('/', (req, res) => {
     res.redirect(302, '/configure');
 });
@@ -1153,15 +1197,39 @@ app.get(['/configure', '/:config/configure'], (req, res) => {
             <div class="section">
                 <div class="section-header"><span class="icon">🔌</span> <span data-i18n="section.connection">Connection</span></div>
                 <div class="section-desc" data-i18n="desc.connection">Prihlasovacie údaje a API kľúče</div>
-                <div class="field">
-                    <label data-i18n="label.uid">SKTorrent UID</label>
-                    <input type="text" id="uid" data-i18n-placeholder="uid.placeholder" placeholder="Napr. 123987" value="${getVal('uid')}">
-                    <div style="font-size:11px;color:#666;margin-top:2px;" data-i18n="uid.help">ℹ️ Nájdeš v cookies po prihlásení na sktorrent.eu</div>
+                
+                <!-- Login cez SKTorrent -->
+                <div class="field" id="loginFields">
+                    <label>🔑 <span data-i18n="label.sktorrentLogin">Prihlásiť sa na SKTorrent</span></label>
+                    <div style="display:flex;gap:8px;flex-wrap:wrap;">
+                        <input type="text" id="loginUser" data-i18n-placeholder="login.uid.placeholder" placeholder="Používateľské meno" style="flex:1;min-width:120px;">
+                        <input type="password" id="loginPass" data-i18n-placeholder="login.pass.placeholder" placeholder="Heslo" style="flex:1;min-width:120px;">
+                        <button id="loginBtn" onclick="loginToSKTorrent()" style="padding:8px 16px;background:linear-gradient(135deg,#8A5A9E,#e040a0);color:white;border:none;border-radius:8px;font-size:13px;font-weight:600;cursor:pointer;white-space:nowrap;" data-i18n="button.login">Prihlásiť sa</button>
+                    </div>
+                    <div id="loginStatus" style="font-size:12px;margin-top:6px;"></div>
                 </div>
-                <div class="field">
+                
+                <!-- Hidden uid/pass fields (vyplnia sa automaticky po prihlásení) -->
+                <div id="hiddenCredentials" style="display:none;">
+                    <input type="hidden" id="uid" value="">
+                    <input type="hidden" id="pass" value="">
+                </div>
+                
+                <!-- Manual fallback - ak niekto chce rucne zadat uid/pass -->
+                <div style="padding:0 20px 8px;">
+                    <a href="#" onclick="toggleManualFields(event)" style="font-size:12px;color:#666;text-decoration:none;" data-i18n="link.manual">▶ Manuálne zadať UID a PASS</a>
+                </div>
+                <div id="manualFields" style="display:none;">
+                    <div class="field">
+                        <label data-i18n="label.uid">SKTorrent UID</label>
+                        <input type="text" id="manualUid" data-i18n-placeholder="uid.placeholder" placeholder="Napr. 123987" value="${getVal('uid')}">
+                        <div style="font-size:11px;color:#666;margin-top:2px;" data-i18n="uid.help">ℹ️ Nájdeš v cookies po prihlásení na sktorrent.eu</div>
+                    </div>
+                    <div class="field">
                         <label data-i18n="label.pass">SKTorrent pass</label>
-                    <input type="password" id="pass" data-i18n-placeholder="pass.placeholder" placeholder="Tvoj pass" value="${getVal('pass')}">
-                    <div style="font-size:11px;color:#666;margin-top:2px;" data-i18n="pass.help">ℹ️ Nájdeš v cookies po prihlásení na sktorrent.eu</div>
+                        <input type="password" id="manualPass" data-i18n-placeholder="pass.placeholder" placeholder="Tvoj pass" value="${getVal('pass')}">
+                        <div style="font-size:11px;color:#666;margin-top:2px;" data-i18n="pass.help">ℹ️ Nájdeš v cookies po prihlásení na sktorrent.eu</div>
+                    </div>
                 </div>
                 <div class="field" id="debridServiceField">
                     <label data-i18n="label.debrid">Debrid služba</label>
@@ -1396,6 +1464,13 @@ app.get(['/configure', '/:config/configure'], (req, res) => {
                     'sort.lang': 'Jazyk',
                     'sort.seeds': 'Seedy',
                     'sort.size': 'Veľkosť',
+                    'label.sktorrentLogin': 'Prihlásiť sa na SKTorrent',
+                    'login.uid.placeholder': 'Používateľské meno',
+                    'login.pass.placeholder': 'Heslo',
+                    'button.login': 'Prihlásiť sa',
+                    'button.loggingIn': 'Prihlasujem...',
+                    'link.manual': '▶ Manuálne zadať UID a PASS',
+                    'link.manualHide': '▼ Skryť manuálne polia',
                     'lang.sk': 'Slovenčina',
                     'lang.en': 'English',
                     'section.sort': 'Zoradenie',
@@ -1470,6 +1545,13 @@ app.get(['/configure', '/:config/configure'], (req, res) => {
                     'sort.lang': 'Language',
                     'sort.seeds': 'Seeders',
                     'sort.size': 'Size',
+                    'label.sktorrentLogin': 'Login to SKTorrent',
+                    'login.uid.placeholder': 'Username',
+                    'login.pass.placeholder': 'Password',
+                    'button.login': 'Login',
+                    'button.loggingIn': 'Logging in...',
+                    'link.manual': '▶ Enter UID and PASS manually',
+                    'link.manualHide': '▼ Hide manual fields',
                     'lang.sk': 'Slovenčina',
                     'lang.en': 'English',
                 }
@@ -1642,9 +1724,16 @@ app.get(['/configure', '/:config/configure'], (req, res) => {
             }
 
             function generateLink() {
+                var uidVal = document.getElementById('uid').value;
+                var passVal = document.getElementById('pass').value;
+                // Ak hidden polia su prazdne, skus manualne
+                if (!uidVal || !passVal) {
+                    uidVal = document.getElementById('manualUid').value;
+                    passVal = document.getElementById('manualPass').value;
+                }
                 var config = {
-                    uid: document.getElementById('uid').value,
-                    pass: document.getElementById('pass').value,
+                    uid: uidVal,
+                    pass: passVal,
                     debridProvider: document.getElementById('debridProvider').value,
                     torbox: document.getElementById('torbox').value,
                     realdebrid: document.getElementById('realdebrid').value,
@@ -1718,6 +1807,66 @@ app.get(['/configure', '/:config/configure'], (req, res) => {
                 var realdebridField = document.getElementById('realdebridField');
                 if (torboxField) torboxField.style.display = (provider === 'torbox') ? '' : 'none';
                 if (realdebridField) realdebridField.style.display = (provider === 'realdebrid') ? '' : 'none';
+            }
+
+            function toggleManualFields(e) {
+                e.preventDefault();
+                var el = document.getElementById('manualFields');
+                var link = e.target;
+                if (el.style.display === 'none') {
+                    el.style.display = 'block';
+                    link.innerHTML = '▼ ' + t('link.manualHide') || '▼ Skryť manuálne polia';
+                } else {
+                    el.style.display = 'none';
+                    link.innerHTML = '▶ ' + t('link.manual') || '▶ Manuálne zadať UID a PASS';
+                }
+            }
+
+            function loginToSKTorrent() {
+                var username = document.getElementById('loginUser').value.trim();
+                var password = document.getElementById('loginPass').value;
+                var statusEl = document.getElementById('loginStatus');
+                var btn = document.getElementById('loginBtn');
+
+                if (!username || !password) {
+                    statusEl.innerHTML = '<span style="color:#ff6b6b;">❌ Vyplň meno aj heslo</span>';
+                    return;
+                }
+
+                btn.disabled = true;
+                btn.style.opacity = '0.6';
+                btn.textContent = t('button.loggingIn') || 'Prihlasujem...';
+                statusEl.innerHTML = '<span style="color:#888;">⏳ Prihlasujem na SKTorrent...</span>';
+
+                fetch('/api/sktorrent-login', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ username: username, password: password })
+                })
+                .then(function(res) { return res.json(); })
+                .then(function(data) {
+                    if (data.error) {
+                        statusEl.innerHTML = '<span style="color:#ff6b6b;">❌ ' + data.error + '</span>';
+                        btn.disabled = false;
+                        btn.style.opacity = '1';
+                        btn.textContent = t('button.login') || 'Prihlásiť sa';
+                        return;
+                    }
+                    // Uloz uid/pass do hidden fields
+                    document.getElementById('uid').value = data.uid;
+                    document.getElementById('pass').value = data.pass;
+                    // Schovaj login polia, ukaz success
+                    document.getElementById('loginFields').style.display = 'none';
+                    statusEl.innerHTML = '<span style="color:#4caf50;">✅ Prihlásený ako <strong>' + data.username + '</strong></span>';
+                    btn.disabled = false;
+                    btn.style.opacity = '1';
+                })
+                .catch(function(err) {
+                    statusEl.innerHTML = '<span style="color:#ff6b6b;">❌ Chyba spojenia so serverom</span>';
+                    btn.disabled = false;
+                    btn.style.opacity = '1';
+                    btn.textContent = t('button.login') || 'Prihlásiť sa';
+                });
             }
 
             // Initialise sort order
