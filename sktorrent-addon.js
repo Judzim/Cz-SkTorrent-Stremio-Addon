@@ -2154,7 +2154,11 @@ app.get('/:config/stream/:type/:id.json', async (req, res) => {
                     let cmp = 0;
 
                     if (criterion === 'cached') {
-                        cmp = (b._sortCached || 0) - (a._sortCached || 0);
+                        const cacheLevel = (s) => {
+                            if (s._sortRdBlocked === 1) return -1; // blocked → najnižšia priorita
+                            return s._sortCached || 0;              // cached=1, not cached=0
+                        };
+                        cmp = cacheLevel(b) - cacheLevel(a);
                     } else if (criterion === 'quality') {
                         cmp = (b._sortQuality || 0) - (a._sortQuality || 0);
                     } else if (criterion === 'lang') {
