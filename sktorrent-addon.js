@@ -1855,9 +1855,12 @@ app.get(['/configure', '/:config/configure'], (req, res) => {
                     // Uloz uid/pass do hidden fields
                     document.getElementById('uid').value = data.uid;
                     document.getElementById('pass').value = data.pass;
-                    // Schovaj login polia, ukaz success
+                    // Vypis uid/pass aj do manual fields
+                    document.getElementById('manualUid').value = data.uid;
+                    document.getElementById('manualPass').value = data.pass;
+                    // Schovaj login polia, ukaz success s uid/pass
                     document.getElementById('loginFields').style.display = 'none';
-                    statusEl.innerHTML = '<span style="color:#4caf50;">✅ Prihlásený ako <strong>' + data.username + '</strong></span>';
+                    statusEl.innerHTML = '<span style="color:#4caf50;">✅ Prihlásený ako <strong>' + data.username + '</strong><br><span style="font-size:11px;color:#888;">UID: ' + data.uid + ' | PASS: ' + data.pass.substring(0, 8) + '...</span></span>';
                     btn.disabled = false;
                     btn.style.opacity = '1';
                 })
