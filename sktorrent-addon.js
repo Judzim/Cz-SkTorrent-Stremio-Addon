@@ -2177,9 +2177,9 @@ app.get('/:config/stream/:type/:id.json', async (req, res) => {
                 };
 
                 const safeName = (stream.fileName || "video.mkv").split('/').join('|');
-                if (debridProvider === 'realdebrid' || debridProvider === 'torbox') {
-                    // All debrid streamy idú cez /play – handler si poradí
-                    // s cachovaným aj necachovaným obsahom
+                if (jeCached || debridProvider === 'realdebrid') {
+                    // RD: ALL streamy idú cez /play (Add Torz + link/generate)
+                    // Cached: cez /play (instant stream)
                     finalStream.url = `${PUBLIC_URL}/${config}/play/${hash}/${proxySeria}/${proxyEpizoda}/${encodeURIComponent(safeName)}`;
                 } else {
                     // TorBox uncached: cez /download (upload .torrent)
@@ -2674,10 +2674,33 @@ app.get("/:config/download/:hash/:sktId", async (req, res) => {
             formData.append("seed", "2");
             formData.append("file", torrentBuffer, { filename: `${hash}.torrent`, contentType: "application/x-bittorrent" });
 
-            await axios.post("https://api.torbox.app/v1/api/torrents/createtorrent", formData, {
+            const createRes = await axios.post("https://api.torbox.app/v1/api/torrents/createtorrent", formData, {
                 headers: { "Authorization": `Bearer ${debridApiKey}`, ...formData.getHeaders() },
                 timeout: 15000
             });
+
+            // Skúsime získať torrentId a rovno requestdl
+            // (torrent už môže byť v shared cache, alebo DUPLICATE_ITEM vracia existujúci ID)
+            const tbData = createRes.data?.data;
+            let torrentId = tbData?.torrent_id ?? tbData?.id ?? tbData?.queued_id ?? null;
+
+            if (torrentId) {
+                try {
+                    const dlRes = await axios.get("https://api.torbox.app/v1/api/torrents/requestdl", {
+                        params: { token: debridApiKey, torrent_id: torrentId, zip_link: false },
+                        headers: { Authorization: `Bearer ${debridApiKey}` },
+                        timeout: 10000
+                    });
+                    const streamUrl = dlRes.data?.data;
+                    if (streamUrl) {
+                        logSuccess(`[TB DOWNLOAD] Torrent je rovno hrateľný, redirectujem na stream`);
+                        return res.redirect(302, streamUrl);
+                    }
+                    logApi(`[TB DOWNLOAD] Torrent nahratý, čaká na stiahnutie (requestdl zatiaľ nič nevráti)`);
+                } catch (dlErr) {
+                    logApi(`[TB DOWNLOAD] requestdl zlyhal, torrent sa ešte sťahuje: ${dlErr.message}`);
+                }
+            }
         } else if (debridProvider === 'realdebrid') {
             // Pridáme magnet cez StremThru (POST /v0/store/torz)
             const magnetUri = `magnet:?xt=urn:btih:${hash}`;
