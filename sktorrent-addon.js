@@ -140,6 +140,9 @@ async function overitTorboxCache(infoHashes, torboxKey) {
     const unikatneHashe = [...new Set(platneHashe)].map(h => h.toLowerCase());
     const hashString = unikatneHashe.sort().join(",");
     
+    const cacheMap = {};
+    
+    // 1. Skontrolujeme shared cache (checkcached) – rýchle, existujúca logika
     logApi(`Checking TorBox cache directly for ${unikatneHashe.length} hashes`);
     try {
         const res = await axios.get(`https://api.torbox.app/v1/api/torrents/checkcached`, {
@@ -148,19 +151,44 @@ async function overitTorboxCache(infoHashes, torboxKey) {
             timeout: 5000
         });
         
-        const cacheMap = {};
         if (res.data && res.data.success && res.data.data) {
             const poleDat = Array.isArray(res.data.data) ? res.data.data : [res.data.data];
             poleDat.forEach(item => { 
                 if (item && item.hash) cacheMap[item.hash.toLowerCase()] = true; 
             });
         }
-        logSuccess(`TorBox cache check complete. Found ${Object.keys(cacheMap).length} cached items.`);
-        return cacheMap;
     } catch (error) {
-        logError("TorBox cache check failed", error);
-        return {};
+        logError("TorBox checkcached failed", error);
     }
+
+    // 2. Skontrolujeme aj mylist – user môže mať torrent stiahnutý v osobnom účte,
+    //    aj keď nie je v shared cache (napr. vzácny/privátny torrent)
+    try {
+        const mylistRes = await axios.get("https://api.torbox.app/v1/api/torrents/mylist", {
+            headers: { Authorization: `Bearer ${torboxKey}` },
+            timeout: 5000,
+            params: { bypass_cache: true }
+        });
+
+        if (mylistRes.data?.success && Array.isArray(mylistRes.data.data)) {
+            for (const item of mylistRes.data.data) {
+                if (!item.hash) continue;
+                const h = item.hash.toLowerCase();
+                // Ak hash hľadáme a torrent je už stiahnutý → označíme ako cached
+                if (unikatneHashe.includes(h) && (item.cached || item.download_finished)) {
+                    if (!cacheMap[h]) {
+                        cacheMap[h] = true;
+                        logCache(`Torrent najdeny v mylist (download_finished): ${h.substring(0,12)}...`);
+                    }
+                }
+            }
+        }
+    } catch (error) {
+        logWarn(`TorBox mylist check failed (volitelne): ${error.message}`);
+    }
+
+    logSuccess(`TorBox cache check complete. Found ${Object.keys(cacheMap).length} cached items (checkcached + mylist).`);
+    return cacheMap;
 }
 
 // ===================================================================
