@@ -1016,7 +1016,10 @@ if (videoSubory.length === 1) {
     // OČISTENIE NÁZVU SÚBORU
     const povodnySubor = najdenyNazovSuboru || "video.mkv";
     let cistyNazovSuboru = povodnySubor.split('/').pop().split('\\').pop();
-    cistyNazovSuboru = cistyNazovSuboru.replace(/[^a-zA-Z0-9.\-]/g, '_');
+    // Pôvodne tu bolo: cistyNazovSuboru = cistyNazovSuboru.replace(/[^a-zA-Z0-9.\-]/g, '_');
+    // Odstránené - encodeURIComponent v URL a decodeURIComponent v play handleri
+    // sa postarajú o správne kódovanie. Tento regex ničil diakritiku (Č, ň, ť, š)
+    // a spôsoboval zlyhanie zhody názvu súboru v TorBox mylist.
 
     // Zistenie či je názov blokovaný Real-Debridom (451)
     const kontrolaNazvov = [cistyNazov, najdenyNazovSuboru || ''].filter(Boolean).join(' ');
