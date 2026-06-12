@@ -2177,9 +2177,9 @@ app.get('/:config/stream/:type/:id.json', async (req, res) => {
                 };
 
                 const safeName = (stream.fileName || "video.mkv").split('/').join('|');
-                if (jeCached || debridProvider === 'realdebrid') {
-                    // RD: ALL streamy idú cez /play (Add Torz + link/generate)
-                    // Cached: cez /play (instant stream)
+                if (debridProvider === 'realdebrid' || debridProvider === 'torbox') {
+                    // All debrid streamy idú cez /play – handler si poradí
+                    // s cachovaným aj necachovaným obsahom
                     finalStream.url = `${PUBLIC_URL}/${config}/play/${hash}/${proxySeria}/${proxyEpizoda}/${encodeURIComponent(safeName)}`;
                 } else {
                     // TorBox uncached: cez /download (upload .torrent)
@@ -2431,6 +2431,7 @@ async function handleTorboxPlay(req, res, hash, seria, epizoda, decodedFileName,
         if (!torrentId) {
             const formData = new FormData();
             formData.append("magnet", `magnet:?xt=urn:btih:${hash}`);
+            formData.append("seed_instantly", "true");
 
             const addRes = await axios.post("https://api.torbox.app/v1/api/torrents/createtorrent", formData, {
                 headers: { Authorization: `Bearer ${TORBOX_API_KEY}`, ...formData.getHeaders() }
@@ -2529,7 +2530,9 @@ if (directLink) {
     logSuccess(`[TORBOX PROXY] Redirectujem na TorBox CDN URL`);
     res.redirect(302, directLink);
 } else {
-    res.status(404).send("Torbox nevrátil URL.");
+    // Torrent je v TorBoxe ale ešte nie je pripravený na streamovanie
+    logApi(`[TORBOX PROXY] Torrent sa ešte sťahuje, requestdl nevrátil URL`);
+    res.status(202).send(`<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Sťahovanie prebieha</title><style>body{font-family:sans-serif;background:#1a1a2e;color:#e0e0e0;display:flex;justify-content:center;align-items:center;min-height:100vh;margin:0;text-align:center}div{max-width:500px;padding:2rem}h1{color:#ffd700;margin-bottom:1rem}p{line-height:1.6;color:#aaa}a{color:#ffd700}</style></head><body><div><h1>⏳ Sťahovanie prebieha</h1><p>Torrent bol pridaný do TorBoxu a práve sa sťahuje.<br>Počkaj kým sa stiahne a potom skús prehrať znova.</p><p style="font-size:0.9em;color:#666;margin-top:2rem">Ak sa video nespustí ani po dokončení, skús obnoviť zoznam streamov.</p></div></body></html>`);
 }
 } catch (err) {
     logError("TorBox play proxy error", err);
@@ -2594,9 +2597,37 @@ async function handleRealDebridPlay(req, res, hash, decodedFileName, RD_API_KEY)
             }
         }
 
-        // Nie je priamo hrateľné – presmerujeme na RD na stiahnutie
-        logApi(`[RD PLAY] Status: ${torzData.status}. Redirecting na RD torrents...`);
-        return res.redirect(302, `https://real-debrid.com/torrents`);
+        // Nie je priamo hrateľné – skúsime najprv nájsť existujúci torrent v StremThru
+        // (môže byť už stiahnutý z predchádzajúceho kliku)
+        logApi(`[RD PLAY] Status: ${torzData.status}. Skúšam nájsť existujúci torrent...`);
+        
+        try {
+            const listRes = await axios.get(`${STREMTHRU_URL}/v0/store/torz`, {
+                headers: getStremThruHeaders(RD_API_KEY),
+                timeout: 10000,
+                params: { hash, limit: 1 }
+            });
+            
+            const existingItems = listRes.data?.data?.items || listRes.data?.data || [];
+            const existingTorz = Array.isArray(existingItems) 
+                ? existingItems.find(t => t.hash?.toLowerCase() === hash.toLowerCase() && t.status === 'downloaded')
+                : null;
+            
+            if (existingTorz?.files?.[0]?.link) {
+                logSuccess(`[RD PLAY] Nájdený existujúci stiahnutý torrent`);
+                const genRes = await axios.post(`${STREMTHRU_URL}/v0/store/torz/link/generate`,
+                    { link: existingTorz.files[0].link },
+                    { headers: getStremThruHeaders(RD_API_KEY), timeout: 15000 }
+                );
+                const directUrl = genRes.data?.data?.link;
+                if (directUrl) return res.redirect(302, directUrl);
+            }
+        } catch (listErr) {
+            logWarn(`[RD PLAY] Chyba pri hľadaní existujúceho torrentu: ${listErr.message}`);
+        }
+        
+        logApi(`[RD PLAY] Torrent sa ešte sťahuje`);
+        return res.status(202).send(`<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Sťahovanie prebieha</title><style>body{font-family:sans-serif;background:#1a1a2e;color:#e0e0e0;display:flex;justify-content:center;align-items:center;min-height:100vh;margin:0;text-align:center}div{max-width:500px;padding:2rem}h1{color:#ffd700;margin-bottom:1rem}p{line-height:1.6;color:#aaa}a{color:#ffd700}</style></head><body><div><h1>⏳ Sťahovanie prebieha</h1><p>Torrent bol pridaný do Real-Debrid a práve sa sťahuje.<br>Počkaj kým sa stiahne a potom skús prehrať znova.</p></div></body></html>`);
 
     } catch (err) {
         const status = err.response?.status;
@@ -2638,6 +2669,9 @@ app.get("/:config/download/:hash/:sktId", async (req, res) => {
 
         if (debridProvider === 'torbox') {
             const formData = new FormData();
+            formData.append("seed_instantly", "true");
+            formData.append("allow_zip", "false");
+            formData.append("seed", "2");
             formData.append("file", torrentBuffer, { filename: `${hash}.torrent`, contentType: "application/x-bittorrent" });
 
             await axios.post("https://api.torbox.app/v1/api/torrents/createtorrent", formData, {
