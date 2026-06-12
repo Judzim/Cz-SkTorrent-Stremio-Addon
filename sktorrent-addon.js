@@ -2177,12 +2177,11 @@ app.get('/:config/stream/:type/:id.json', async (req, res) => {
                 };
 
                 const safeName = (stream.fileName || "video.mkv").split('/').join('|');
-                if (jeCached || debridProvider === 'realdebrid') {
-                    // RD: ALL streamy idú cez /play (Add Torz + link/generate)
-                    // Cached: cez /play (instant stream)
+                if (jeCached) {
+                    // Cached (akýkoľvek debrid): cez /play – okamžité prehratie
                     finalStream.url = `${PUBLIC_URL}/${config}/play/${hash}/${proxySeria}/${proxyEpizoda}/${encodeURIComponent(safeName)}`;
                 } else {
-                    // TorBox uncached: cez /download (upload .torrent)
+                    // Necachovaný: cez /download – pridá do debridu, potom info video alebo rovno stream
                     finalStream.url = `${PUBLIC_URL}/${config}/download/${hash}/${stream.sktId}`;
                 }
                 return finalStream;
@@ -2716,6 +2715,19 @@ app.get("/:config/download/:hash/:sktId", async (req, res) => {
                 const torzData = addRes.data?.data;
                 if (torzData && torzData.id) {
                     logApi(`[RD DOWNLOAD] StremThru pridalo torrent: ${torzData.id} (status: ${torzData.status})`);
+                    
+                    // Ak je rovno stiahnutý, vygenerujeme CDN link a streamujeme
+                    if (torzData.status === 'downloaded' && torzData.files?.[0]?.link) {
+                        const genRes = await axios.post(`${STREMTHRU_URL}/v0/store/torz/link/generate`,
+                            { link: torzData.files[0].link },
+                            { headers: getStremThruHeaders(debridApiKey), timeout: 15000 }
+                        );
+                        const directUrl = genRes.data?.data?.link;
+                        if (directUrl) {
+                            logSuccess(`[RD DOWNLOAD] Torrent je rovno hrateľný, redirectujem na stream`);
+                            return res.redirect(302, directUrl);
+                        }
+                    }
                 } else {
                     logWarn(`[RD DOWNLOAD] StremThru nevrátilo ID: ${JSON.stringify(addRes.data).substring(0,100)}`);
                 }
