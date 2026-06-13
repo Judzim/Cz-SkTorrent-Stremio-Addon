@@ -2713,6 +2713,7 @@ app.get("/:config/download/:hash/:sktId", async (req, res) => {
             // (torrent už môže byť v shared cache, alebo DUPLICATE_ITEM vracia existujúci ID)
             const tbData = createRes.data?.data;
             let torrentId = tbData?.torrent_id ?? tbData?.id ?? tbData?.queued_id ?? null;
+            const bolQueued = !!tbData?.queued_id;
 
             if (torrentId) {
                 try {
@@ -2729,6 +2730,36 @@ app.get("/:config/download/:hash/:sktId", async (req, res) => {
                     logApi(`[TB DOWNLOAD] Torrent nahratý, čaká na stiahnutie (requestdl zatiaľ nič nevráti)`);
                 } catch (dlErr) {
                     logApi(`[TB DOWNLOAD] requestdl zlyhal, torrent sa ešte sťahuje: ${dlErr.message}`);
+                }
+            }
+
+            // Ak bol torrent zaradený do queue (sloty plné), uvoľníme najstarší hotový seeding slot
+            if (bolQueued || (!torrentId && createRes.data?.error === 'DUPLICATE_ITEM')) {
+                try {
+                    const mylistRes = await axios.get("https://api.torbox.app/v1/api/torrents/mylist", {
+                        headers: { Authorization: `Bearer ${debridApiKey}` },
+                        timeout: 8000,
+                        params: { bypass_cache: true }
+                    });
+
+                    if (mylistRes.data?.success && Array.isArray(mylistRes.data.data)) {
+                        const finishedSeeding = mylistRes.data.data
+                            .filter(t => t.download_finished && t.active)
+                            .sort((a, b) => (a.download_finished_at || 0) - (b.download_finished_at || 0));
+
+                        if (finishedSeeding.length > 0) {
+                            const toStop = finishedSeeding[0];
+                            await axios.post("https://api.torbox.app/v1/api/torrents/controltorrent",
+                                { torrent_id: String(toStop.id), operation: "stop_seeding" },
+                                { headers: { Authorization: `Bearer ${debridApiKey}` }, timeout: 8000 }
+                            );
+                            logApi(`[TB SLOTS] Zastavený seeding torrentu ${toStop.id} (uvoľnený slot pre nový)`);
+                        } else {
+                            logApi(`[TB SLOTS] Žiadny hotový seeding torrent na uvoľnenie`);
+                        }
+                    }
+                } catch (slotErr) {
+                    logWarn(`[TB SLOTS] Chyba pri uvoľňovaní slotu: ${slotErr.message}`);
                 }
             }
         } else if (debridProvider === 'realdebrid') {
