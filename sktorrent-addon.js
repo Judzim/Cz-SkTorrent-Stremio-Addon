@@ -2208,8 +2208,10 @@ app.get('/:config/stream/:type/:id.json', async (req, res) => {
                 };
 
                 const safeName = (stream.fileName || "video.mkv").split('/').join('|');
-                if (jeCached) {
-                    // Cached (akýkoľvek debrid): cez /play – okamžité prehratie
+                if (debridProvider === 'realdebrid' || debridProvider === 'torbox') {
+                    // Všetky debrid streamy idú cez /play – handler vždy znova skontroluje
+                    // TorBox mylist / StremThru a ak je torrent hotový, pustí video.
+                    // Ak nie, presmeruje na /info-video.
                     finalStream.url = `${PUBLIC_URL}/${config}/play/${hash}/${proxySeria}/${proxyEpizoda}/${encodeURIComponent(safeName)}`;
                 } else {
                     // Necachovaný: cez /download – pridá do debridu, potom info video alebo rovno stream
@@ -2561,8 +2563,8 @@ if (directLink) {
     res.redirect(302, directLink);
 } else {
     // Torrent je v TorBoxe ale ešte nie je pripravený na streamovanie
-    logApi(`[TORBOX PROXY] Torrent sa ešte sťahuje, requestdl nevrátil URL`);
-    res.status(202).send(`<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Sťahovanie prebieha</title><style>body{font-family:sans-serif;background:#1a1a2e;color:#e0e0e0;display:flex;justify-content:center;align-items:center;min-height:100vh;margin:0;text-align:center}div{max-width:500px;padding:2rem}h1{color:#ffd700;margin-bottom:1rem}p{line-height:1.6;color:#aaa}a{color:#ffd700}</style></head><body><div><h1>⏳ Sťahovanie prebieha</h1><p>Torrent bol pridaný do TorBoxu a práve sa sťahuje.<br>Počkaj kým sa stiahne a potom skús prehrať znova.</p><p style="font-size:0.9em;color:#666;margin-top:2rem">Ak sa video nespustí ani po dokončení, skús obnoviť zoznam streamov.</p></div></body></html>`);
+    logApi(`[TORBOX PROXY] Torrent sa ešte sťahuje, redirect na /info-video`);
+    res.redirect(302, `/info-video`);
 }
 } catch (err) {
     logError("TorBox play proxy error", err);
@@ -2656,8 +2658,8 @@ async function handleRealDebridPlay(req, res, hash, decodedFileName, RD_API_KEY)
             logWarn(`[RD PLAY] Chyba pri hľadaní existujúceho torrentu: ${listErr.message}`);
         }
         
-        logApi(`[RD PLAY] Torrent sa ešte sťahuje`);
-        return res.status(202).send(`<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Sťahovanie prebieha</title><style>body{font-family:sans-serif;background:#1a1a2e;color:#e0e0e0;display:flex;justify-content:center;align-items:center;min-height:100vh;margin:0;text-align:center}div{max-width:500px;padding:2rem}h1{color:#ffd700;margin-bottom:1rem}p{line-height:1.6;color:#aaa}a{color:#ffd700}</style></head><body><div><h1>⏳ Sťahovanie prebieha</h1><p>Torrent bol pridaný do Real-Debrid a práve sa sťahuje.<br>Počkaj kým sa stiahne a potom skús prehrať znova.</p></div></body></html>`);
+        logApi(`[RD PLAY] Torrent sa ešte sťahuje, redirect na /info-video`);
+        return res.redirect(302, `/info-video`);
 
     } catch (err) {
         const status = err.response?.status;
@@ -2753,7 +2755,17 @@ app.get("/:config/download/:hash/:sktId", async (req, res) => {
                                 { torrent_id: String(toStop.id), operation: "stop_seeding" },
                                 { headers: { Authorization: `Bearer ${debridApiKey}` }, timeout: 8000 }
                             );
-                            logApi(`[TB SLOTS] Zastavený seeding torrentu ${toStop.id} (uvoľnený slot pre nový)`);
+                            logApi(`[TB SLOTS] Zastavený seeding torrentu ${toStop.id}`);
+
+                            // Explicitne spustíme queued torrent (TorBox ho nespustí automaticky)
+                            const queuedId = torrentId || tbData?.queued_id;
+                            if (queuedId) {
+                                await axios.post("https://api.torbox.app/v1/api/torrents/controltorrent",
+                                    { torrent_id: String(queuedId), operation: "resume" },
+                                    { headers: { Authorization: `Bearer ${debridApiKey}` }, timeout: 8000 }
+                                );
+                                logApi(`[TB SLOTS] Spustený queued torrent ${queuedId}`);
+                            }
                         } else {
                             logApi(`[TB SLOTS] Žiadny hotový seeding torrent na uvoľnenie`);
                         }
