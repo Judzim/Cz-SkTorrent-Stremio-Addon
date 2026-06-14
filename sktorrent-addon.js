@@ -266,6 +266,35 @@ async function overitRealDebridCache(infoHashes, rdKey) {
         }
     }
 
+    // 2. Fallback: skontrolujeme aj osobný RD účet cez GET /v0/store/torz
+    //    (rovnako ako TorBox kontroluje mylist — torrent môže byť stiahnutý
+    //    v osobnom účte aj keď nie je v shared cache)
+    const uzNeznameHashe = unikatneHashe.filter(h => !cacheMap[h]);
+    if (uzNeznameHashe.length > 0) {
+        logApi(`RD osobný účet: kontrolujem ${uzNeznameHashe.length} neznámych hashov`);
+        try {
+            const listRes = await axios.get(`${STREMTHRU_URL}/v0/store/torz`, {
+                headers: getStremThruHeaders(RD_API_KEY),
+                timeout: 10000,
+                params: { limit: 1000 }
+            });
+
+            const items = listRes.data?.data?.items || listRes.data?.data || [];
+            if (Array.isArray(items)) {
+                for (const item of items) {
+                    if (!item.hash) continue;
+                    const h = item.hash.toLowerCase();
+                    if (uzNeznameHashe.includes(h) && item.status === 'downloaded') {
+                        cacheMap[h] = true;
+                        logCache(`RD torrent najdeny v osobnom ucte (downloaded): ${h.substring(0,12)}...`);
+                    }
+                }
+            }
+        } catch (listErr) {
+            logWarn(`RD osobný účet check failed (volitelne): ${listErr.message}`);
+        }
+    }
+
     return cacheMap;
 }
 
@@ -2662,8 +2691,8 @@ async function handleRealDebridPlay(req, res, hash, decodedFileName, RD_API_KEY)
             logWarn(`[RD PLAY] Chyba pri hľadaní existujúceho torrentu: ${listErr.message}`);
         }
         
-        logApi(`[RD PLAY] Status: ${torzData.status}. Redirecting na RD torrents...`);
-        return res.redirect(302, `https://real-debrid.com/torrents`);
+        logApi(`[RD PLAY] Status: ${torzData.status}. Redirecting na /info-video`);
+        return res.redirect(302, `/info-video`);
 
     } catch (err) {
         const status = err.response?.status;
