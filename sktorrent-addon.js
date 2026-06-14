@@ -2254,13 +2254,10 @@ app.get('/:config/stream/:type/:id.json', async (req, res) => {
                 };
 
                 const safeName = (stream.fileName || "video.mkv").split('/').join('|');
-                if (jeCached) {
-                    // Cached: cez /play – okamžité prehratie
-                    finalStream.url = `${PUBLIC_URL}/${config}/play/${hash}/${proxySeria}/${proxyEpizoda}/${encodeURIComponent(safeName)}`;
-                } else {
-                    // Necachovaný: cez /download – nahranie do debridu, info video
-                    finalStream.url = `${PUBLIC_URL}/${config}/download/${hash}/${stream.sktId}`;
-                }
+                // Všetky debrid streamy idú cez /play – handler vždy znova skontroluje
+                // TorBox mylist / StremThru a ak je torrent hotový, pustí video.
+                // Ak nie, presmeruje na /info-video. Žiadne Stremio cache problémy.
+                finalStream.url = `${PUBLIC_URL}/${config}/play/${hash}/${proxySeria}/${proxyEpizoda}/${encodeURIComponent(safeName)}`;
                 return finalStream;
             });
 
@@ -2489,6 +2486,7 @@ app.get('/:config/play/:hash/:seria/:epizoda/:fileName', async (req, res) => {
 async function handleTorboxPlay(req, res, hash, seria, epizoda, decodedFileName, userConfig, TORBOX_API_KEY) {
     logApi(`TorBox Play Request: Hash: ${hash} | S${seria}E${epizoda} | File: ${decodedFileName}`);
     try {
+        // 1. Skontrolujeme mylist — existuje už torrent v účte?
         const tbTorrentsRes = await axios.get("https://api.torbox.app/v1/api/torrents/mylist", {
             headers: { Authorization: `Bearer ${TORBOX_API_KEY}` }
         });
@@ -2501,20 +2499,65 @@ async function handleTorboxPlay(req, res, hash, seria, epizoda, decodedFileName,
             najdenyTorrentObj = zoznam.find(t => t.hash && t.hash.toLowerCase() === hash.toLowerCase());
             if (najdenyTorrentObj) {
                 torrentId = najdenyTorrentObj.id;
+                logApi(`[TB PLAY] Torrent najdeny v myliste (ID: ${torrentId}, stav: ${najdenyTorrentObj.download_finished ? 'hotovy' : 'stahuje sa'})`);
             }
         }
 
+        // 2. Ak torrent nie je v myliste, nahrajeme ho (magnet)
         if (!torrentId) {
             const formData = new FormData();
             formData.append("magnet", `magnet:?xt=urn:btih:${hash}`);
             formData.append("seed_instantly", "true");
+            formData.append("allow_zip", "false");
+            formData.append("seed", "2");
 
             const addRes = await axios.post("https://api.torbox.app/v1/api/torrents/createtorrent", formData, {
-                headers: { Authorization: `Bearer ${TORBOX_API_KEY}`, ...formData.getHeaders() }
+                headers: { Authorization: `Bearer ${TORBOX_API_KEY}`, ...formData.getHeaders() },
+                timeout: 15000
             });
 
-            torrentId = addRes.data?.data?.torrent_id;
+            const tbData = addRes.data?.data;
+            torrentId = tbData?.torrent_id ?? tbData?.id ?? tbData?.queued_id ?? null;
+            const bolQueued = !!tbData?.queued_id;
 
+            // Ak bol zaradený do queue, uvoľníme slot
+            if (bolQueued && torrentId) {
+                logApi(`[TB PLAY] Torrent je v queue (ID: ${torrentId}), uvoľňujem slot...`);
+                try {
+                    const slotRes = await axios.get("https://api.torbox.app/v1/api/torrents/mylist", {
+                        headers: { Authorization: `Bearer ${TORBOX_API_KEY}` },
+                        timeout: 8000,
+                        params: { bypass_cache: true }
+                    });
+
+                    if (slotRes.data?.success && Array.isArray(slotRes.data.data)) {
+                        const finishedSeeding = slotRes.data.data
+                            .filter(t => t.download_finished && t.active)
+                            .sort((a, b) => (a.download_finished_at || 0) - (b.download_finished_at || 0));
+
+                        if (finishedSeeding.length > 0) {
+                            const toStop = finishedSeeding[0];
+                            await axios.post("https://api.torbox.app/v1/api/torrents/controltorrent",
+                                { torrent_id: String(toStop.id), operation: "stop_seeding" },
+                                { headers: { Authorization: `Bearer ${TORBOX_API_KEY}` }, timeout: 8000 }
+                            );
+                            logApi(`[TB PLAY] Zastavený seeding torrentu ${toStop.id}`);
+
+                            await new Promise(r => setTimeout(r, 2000));
+
+                            await axios.post("https://api.torbox.app/v1/api/queued/controlqueued",
+                                { queued_id: Number(torrentId), operation: "start" },
+                                { headers: { Authorization: `Bearer ${TORBOX_API_KEY}`, "Content-Type": "application/json" }, timeout: 10000 }
+                            );
+                            logApi(`[TB PLAY] Spustený queued torrent ${torrentId}`);
+                        }
+                    }
+                } catch (slotErr) {
+                    logWarn(`[TB PLAY] Slot management zlyhal: ${slotErr.message}`);
+                }
+            }
+
+            // Počkáme a refreshneme mylist
             await new Promise(r => setTimeout(r, 3000));
             const tbRefreshRes = await axios.get("https://api.torbox.app/v1/api/torrents/mylist", {
                 headers: { Authorization: `Bearer ${TORBOX_API_KEY}` }
@@ -2522,96 +2565,104 @@ async function handleTorboxPlay(req, res, hash, seria, epizoda, decodedFileName,
 
             if (tbRefreshRes.data && tbRefreshRes.data.data) {
                 const zoznamRefresh = Array.isArray(tbRefreshRes.data.data) ? tbRefreshRes.data.data : [tbRefreshRes.data.data];
-                najdenyTorrentObj = zoznamRefresh.find(t => t.id === torrentId);
+                najdenyTorrentObj = zoznamRefresh.find(t => t.hash && t.hash.toLowerCase() === hash.toLowerCase());
+                if (najdenyTorrentObj) {
+                    torrentId = najdenyTorrentObj.id;
+                }
             }
         }
 
-        let spravneFileId = null;
+        // 3. Ak torrent je hotový, skúsime requestdl a pustíme video
+        if (najdenyTorrentObj && (najdenyTorrentObj.cached || najdenyTorrentObj.download_finished)) {
+            let spravneFileId = null;
 
-        if (najdenyTorrentObj && najdenyTorrentObj.files) {
-            const videoSbory = najdenyTorrentObj.files.filter(f => /\.(mp4|mkv|avi|m4v)$/i.test(f.name));
+            if (najdenyTorrentObj.files) {
+                const videoSbory = najdenyTorrentObj.files.filter(f => /\.(mp4|mkv|avi|m4v)$/i.test(f.name));
 
-            logInfo(`[TORBOX] Hľadám súbor medzi ${videoSbory.length} video súbormi. Hľadaný názov: "${decodedFileName}"`);
-            videoSbory.slice(0, 5).forEach(f => logInfo(`  → ID: ${f.id} | Name: ${f.name}`));
+                logInfo(`[TORBOX] Hľadám súbor medzi ${videoSbory.length} video súbormi. Hľadaný názov: "${decodedFileName}"`);
+                videoSbory.slice(0, 5).forEach(f => logInfo(`  → ID: ${f.id} | Name: ${f.name}`));
 
-            // 1. POKUS: zhoda podľa názvu súboru (najpresnejšie)
-            if (decodedFileName) {
-                const zhoda = videoSbory.find(f =>
-                    f.name === decodedFileName ||
-                    f.name.endsWith(decodedFileName) ||
-                    decodedFileName.endsWith(f.name) ||
-                    // Porovnanie len samotného názvu súboru (bez adresára)
-                    f.name.split("/").pop() === decodedFileName.split("/").pop()
-                );
-                if (zhoda) {
-                    spravneFileId = zhoda.id;
-                    logSuccess(`[TORBOX PROXY] Zhoda podľa názvu → ID: ${zhoda.id} | ${zhoda.name}`);
-                }
-            }
-
-            // 2. FALLBACK: regex ak zhoda podľa názvu zlyhala
-            if (spravneFileId === null) {
-                logWarn(`[TORBOX PROXY] Zhoda podľa názvu zlyhala, skúšam regex...`);
-                const epCislo = parseInt(epizoda);
-                const epStr = String(epCislo).padStart(2, "0");
-                const seriaStr = String(seria).padStart(2, "0");
-
-                const epRegexy = [
-                    new RegExp(`[\\\\/](?:\\d+\\.\\s*s[eé]rie[\\\\/])?0*${epCislo}[\\s._-][^\\\\/]*\\.(?:mp4|mkv|avi|m4v)$`, "i"),
-                    new RegExp(`\\bS${seriaStr}[._-]?E${epStr}\\b`, "i"),
-                    new RegExp(`\\b${seria}x${epStr}\\b`, "i"),
-                    new RegExp(`\\b${seriaStr}x${epStr}\\b`, "i"),
-                    new RegExp(`S${seriaStr}[._-]?E${epStr}(?![0-9])`, "i"),
-                    new RegExp(`Ep(?:isode)?[._\\s]*0*${epCislo}\\b`, "i"),
-                    new RegExp(`\\bE${epStr}\\b`, "i"),
-                    new RegExp(`(?:^|[\\\\/])[\\s._-]*0*${epCislo}[\\s._-].*\\.(?:mp4|mkv|avi|m4v)$`, "i")
-                ];
-
-                for (const reg of epRegexy) {
-                    const zhoda = videoSbory.find(f => reg.test(f.name));
+                // Zhoda podľa názvu
+                if (decodedFileName) {
+                    const zhoda = videoSbory.find(f =>
+                        f.name === decodedFileName ||
+                        f.name.endsWith(decodedFileName) ||
+                        decodedFileName.endsWith(f.name) ||
+                        f.name.split("/").pop() === decodedFileName.split("/").pop()
+                    );
                     if (zhoda) {
                         spravneFileId = zhoda.id;
-                        logSuccess(`[TORBOX PROXY] Regex zhoda → ID: ${zhoda.id} | ${zhoda.name}`);
-                        break;
+                        logSuccess(`[TORBOX] Zhoda podľa názvu → ID: ${zhoda.id} | ${zhoda.name}`);
                     }
+                }
+
+                // Regex fallback
+                if (spravneFileId === null) {
+                    logWarn(`[TORBOX] Zhoda podľa názvu zlyhala, skúšam regex...`);
+                    const epCislo = parseInt(epizoda);
+                    const epStr = String(epCislo).padStart(2, "0");
+                    const seriaStr = String(seria).padStart(2, "0");
+
+                    const epRegexy = [
+                        new RegExp(`[\\\\\\\\/](?:\\\\d+\\\\.\\\\s*s[eé]rie[\\\\\\\\/])?0*${epCislo}[\\\\s._-][^\\\\\\\\/]*\\\\.(?:mp4|mkv|avi|m4v)$`, "i"),
+                        new RegExp(`\\\\bS${seriaStr}[._-]?E${epStr}\\\\b`, "i"),
+                        new RegExp(`\\\\b${seria}x${epStr}\\\\b`, "i"),
+                        new RegExp(`\\\\b${seriaStr}x${epStr}\\\\b`, "i"),
+                        new RegExp(`S${seriaStr}[._-]?E${epStr}(?![0-9])`, "i"),
+                        new RegExp(`Ep(?:isode)?[._\\\\s]*0*${epCislo}\\\\b`, "i"),
+                        new RegExp(`\\\\bE${epStr}\\\\b`, "i"),
+                        new RegExp(`(?:^|[\\\\\\\\/])[\\\\s._-]*0*${epCislo}[\\\\s._-].*\\\\.(?:mp4|mkv|avi|m4v)$`, "i")
+                    ];
+
+                    for (const reg of epRegexy) {
+                        const zhoda = videoSbory.find(f => reg.test(f.name));
+                        if (zhoda) {
+                            spravneFileId = zhoda.id;
+                            logSuccess(`[TORBOX] Regex zhoda → ID: ${zhoda.id} | ${zhoda.name}`);
+                            break;
+                        }
+                    }
+                }
+
+                // Fallback: len 1 video súbor
+                if (spravneFileId === null && videoSbory.length === 1) {
+                    spravneFileId = videoSbory[0].id;
+                    logWarn(`[TORBOX] Len 1 súbor, púšťam: ${videoSbory[0].name}`);
                 }
             }
 
-            // 3. POSLEDNÝ FALLBACK: ak máme len 1 súbor
-            if (spravneFileId === null) {
-                if (videoSbory.length === 1) {
-                    spravneFileId = videoSbory[0].id;
-                    logWarn(`[TORBOX PROXY] Len 1 súbor, púšťam: ${videoSbory[0].name}`);
-                } else {
-                    logError(`[TORBOX PROXY] Zlyhanie! Neviem určiť správny súbor.`);
-                    return res.status(404).send("Torbox nevie identifikovať súbor epizódy.");
+            if (spravneFileId === null) spravneFileId = 0;
+
+            try {
+                const downloadRes = await axios.get("https://api.torbox.app/v1/api/torrents/requestdl", {
+                    params: {
+                        token: TORBOX_API_KEY,
+                        torrent_id: torrentId,
+                        file_id: spravneFileId,
+                        zip_link: false
+                    },
+                    headers: { Authorization: `Bearer ${TORBOX_API_KEY}` },
+                    timeout: 10000
+                });
+
+                const directLink = downloadRes.data?.data;
+                if (directLink) {
+                    logSuccess(`[TORBOX] Redirectujem na TorBox CDN URL`);
+                    return res.redirect(302, directLink);
                 }
+            } catch (dlErr) {
+                logWarn(`[TORBOX] requestdl zlyhal: ${dlErr.message}`);
             }
         }
 
-        if (spravneFileId === null) spravneFileId = 0;
+        // 4. Torrent sa ešte sťahuje → info-video
+        logApi(`[TORBOX] Torrent sa ešte sťahuje, redirect na /info-video`);
+        return res.redirect(302, `/info-video`);
 
-        const downloadRes = await axios.get("https://api.torbox.app/v1/api/torrents/requestdl", {
-            params: {
-                token: TORBOX_API_KEY,
-                torrent_id: torrentId,
-                file_id: spravneFileId,
-                zip_link: false
-            },
-            headers: { Authorization: `Bearer ${TORBOX_API_KEY}` }
-        });
-
-const directLink = downloadRes.data?.data;
-if (directLink) {
-    logSuccess(`[TORBOX PROXY] Redirectujem na TorBox CDN URL`);
-    res.redirect(302, directLink);
-} else {
-    res.status(404).send("Torbox nevrátil URL.");
-}
-} catch (err) {
-    logError("TorBox play proxy error", err);
-    res.status(500).send("Chyba proxy servera.");
-}
+    } catch (err) {
+        logError("TorBox play proxy error", err);
+        res.status(500).send("Chyba proxy servera.");
+    }
 }
 
 function getStremThruHeaders(apiKey) {
@@ -2724,157 +2775,9 @@ async function handleRealDebridPlay(req, res, hash, decodedFileName, RD_API_KEY)
 // ========================================================================="
 
 app.get("/:config/download/:hash/:sktId", async (req, res) => {
-    const { hash, sktId, config } = req.params;
-    
-    const userConfig = decodeConfig(config);
-    if (!userConfig || !userConfig.uid || !userConfig.pass) return res.status(400).send("Chyba Configu");
-
-    const debridProvider = userConfig.debridProvider || (userConfig.torbox ? 'torbox' : '');
-    const debridApiKey = debridProvider === 'torbox' ? userConfig.torbox : (debridProvider === 'realdebrid' ? userConfig.realdebrid : null);
-
-    if (!debridApiKey) return res.status(400).send("Chýba debrid API kľúč.");
-
-    const userAxios = getFastAxios(userConfig);
-
-    try {
-        const torrentUrl = `${BASE_URL}/torrent/download.php?id=${sktId}`;
-        const torrentBuffer = await stiahnutSurovyTorrent(torrentUrl, userAxios);
-        if (!torrentBuffer) return res.status(500).send("Nepodarilo sa stiahnuť .torrent súbor.");
-
-        if (debridProvider === 'torbox') {
-            const formData = new FormData();
-            formData.append("seed_instantly", "true");
-            formData.append("allow_zip", "false");
-            formData.append("seed", "2");
-            formData.append("file", torrentBuffer, { filename: `${hash}.torrent`, contentType: "application/x-bittorrent" });
-
-            const createRes = await axios.post("https://api.torbox.app/v1/api/torrents/createtorrent", formData, {
-                headers: { "Authorization": `Bearer ${debridApiKey}`, ...formData.getHeaders() },
-                timeout: 15000
-            });
-
-            // Skúsime získať torrentId a rovno requestdl
-            // (torrent už môže byť v shared cache, alebo DUPLICATE_ITEM vracia existujúci ID)
-            const tbData = createRes.data?.data;
-            let torrentId = tbData?.torrent_id ?? tbData?.id ?? tbData?.queued_id ?? null;
-            const bolQueued = !!tbData?.queued_id;
-
-            if (torrentId) {
-                try {
-                    const dlRes = await axios.get("https://api.torbox.app/v1/api/torrents/requestdl", {
-                        params: { token: debridApiKey, torrent_id: torrentId, zip_link: false },
-                        headers: { Authorization: `Bearer ${debridApiKey}` },
-                        timeout: 10000
-                    });
-                    const streamUrl = dlRes.data?.data;
-                    if (streamUrl) {
-                        logSuccess(`[TB DOWNLOAD] Torrent je rovno hrateľný, redirectujem na stream`);
-                        return res.redirect(302, streamUrl);
-                    }
-                    logApi(`[TB DOWNLOAD] Torrent nahratý, čaká na stiahnutie (requestdl zatiaľ nič nevráti)`);
-                } catch (dlErr) {
-                    logApi(`[TB DOWNLOAD] requestdl zlyhal, torrent sa ešte sťahuje: ${dlErr.message}`);
-                }
-            }
-
-            // Ak bol torrent zaradený do queue (sloty plné), uvoľníme najstarší hotový seeding slot
-            if (bolQueued || (!torrentId && createRes.data?.error === 'DUPLICATE_ITEM')) {
-                try {
-                    const mylistRes = await axios.get("https://api.torbox.app/v1/api/torrents/mylist", {
-                        headers: { Authorization: `Bearer ${debridApiKey}` },
-                        timeout: 8000,
-                        params: { bypass_cache: true }
-                    });
-
-                    if (mylistRes.data?.success && Array.isArray(mylistRes.data.data)) {
-                        const finishedSeeding = mylistRes.data.data
-                            .filter(t => t.download_finished && t.active)
-                            .sort((a, b) => (a.download_finished_at || 0) - (b.download_finished_at || 0));
-
-                        if (finishedSeeding.length > 0) {
-                            const toStop = finishedSeeding[0];
-                            await axios.post("https://api.torbox.app/v1/api/torrents/controltorrent",
-                                { torrent_id: String(toStop.id), operation: "stop_seeding" },
-                                { headers: { Authorization: `Bearer ${debridApiKey}` }, timeout: 8000 }
-                            );
-                            logApi(`[TB SLOTS] Zastavený seeding torrentu ${toStop.id}`);
-
-                            // Explicitne spustíme queued torrent — POZOR: čerstvo queued torrent nie je v myliste,
-                            // preto treba použiť /queued/controlqueued (nie /torrents/controltorrent)
-                            const queuedId = torrentId || tbData?.queued_id;
-                            if (queuedId) {
-                                // Po stop_seeding počkáme 2s, aby TorBox stihol uvoľniť slot
-                                await new Promise(r => setTimeout(r, 2000));
-                                
-                                if (bolQueued) {
-                                    // Čerstvo queued torrent — špeciálny endpoint
-                                    await axios.post("https://api.torbox.app/v1/api/queued/controlqueued",
-                                        { queued_id: Number(queuedId), operation: "start" },
-                                        { headers: { Authorization: `Bearer ${debridApiKey}`, "Content-Type": "application/json" }, timeout: 10000 }
-                                    );
-                                    logApi(`[TB SLOTS] Spustený queued torrent ${queuedId} cez /queued/controlqueued`);
-                                } else {
-                                    // Torrent už je v myliste — stačí resume
-                                    await axios.post("https://api.torbox.app/v1/api/torrents/controltorrent",
-                                        { torrent_id: String(queuedId), operation: "resume" },
-                                        { headers: { Authorization: `Bearer ${debridApiKey}` }, timeout: 10000 }
-                                    );
-                                    logApi(`[TB SLOTS] Spustený queued torrent ${queuedId} cez controltorrent resume`);
-                                }
-                            }
-                        } else {
-                            logApi(`[TB SLOTS] Žiadny hotový seeding torrent na uvoľnenie`);
-                        }
-                    }
-                } catch (slotErr) {
-                    logWarn(`[TB SLOTS] Chyba pri uvoľňovaní slotu: ${slotErr.message}`);
-                }
-            }
-        } else if (debridProvider === 'realdebrid') {
-            // Pridáme magnet cez StremThru (POST /v0/store/torz)
-            const magnetUri = `magnet:?xt=urn:btih:${hash}`;
-            try {
-                const addRes = await axios.post(`${STREMTHRU_URL}/v0/store/torz`,
-                    { link: magnetUri },
-                    {
-                        headers: getStremThruHeaders(debridApiKey),
-                        timeout: 30000
-                    }
-                );
-
-                const torzData = addRes.data?.data;
-                if (torzData && torzData.id) {
-                    logApi(`[RD DOWNLOAD] StremThru pridalo torrent: ${torzData.id} (status: ${torzData.status})`);
-                    
-                    // Ak je rovno stiahnutý, vygenerujeme CDN link a streamujeme
-                    if (torzData.status === 'downloaded' && torzData.files?.[0]?.link) {
-                        const genRes = await axios.post(`${STREMTHRU_URL}/v0/store/torz/link/generate`,
-                            { link: torzData.files[0].link },
-                            { headers: getStremThruHeaders(debridApiKey), timeout: 15000 }
-                        );
-                        const directUrl = genRes.data?.data?.link;
-                        if (directUrl) {
-                            logSuccess(`[RD DOWNLOAD] Torrent je rovno hrateľný, redirectujem na stream`);
-                            return res.redirect(302, directUrl);
-                        }
-                    }
-                } else {
-                    logWarn(`[RD DOWNLOAD] StremThru nevrátilo ID: ${JSON.stringify(addRes.data).substring(0,100)}`);
-                }
-            } catch (addErr) {
-                if (addErr.response?.status === 451 || addErr.response?.data?.code === 'UNAVAILABLE_FOR_LEGAL_REASONS') {
-                    logWarn(`[RD DOWNLOAD] StremThru blokuje súbor (infringing_file)`);
-                } else {
-                    logWarn(`[RD DOWNLOAD] StremThru error: ${addErr.message}`);
-                }
-            }
-        }
-
-        res.redirect(302, `/info-video`);
-    } catch (err) {
-        logError("Debrid API download/upload error", err);
-        res.status(500).send("Chyba API sťahovania debrid služby.");
-    }
+    const { hash, config } = req.params;
+    logApi(`[REDIRECT] /download → /play (hash: ${hash})`);
+    return res.redirect(302, `/${config}/play/${hash}/0/0/download-redirect.mkv`);
 });
 
 app.get("/logo.jpg", (req, res) => {
