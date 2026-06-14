@@ -1961,6 +1961,11 @@ app.get('/:config?/catalog/:type/:id.json', (req, res) => {
 
 // --- Stream Route ---
 app.get('/:config/stream/:type/:id.json', async (req, res) => {
+    // Zabránime cacheovaniu na úrovni nginx/CDN — každý refresh musí ísť do addonu
+    res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, private');
+    res.setHeader('Pragma', 'no-cache');
+    res.setHeader('Expires', '0');
+    
     const { type: aplikaciaTyp, id, config } = req.params;
     const startCas = Date.now();
     
