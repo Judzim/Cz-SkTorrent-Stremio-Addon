@@ -2677,81 +2677,110 @@ function getStremThruHeaders(apiKey) {
 async function handleRealDebridPlay(req, res, hash, decodedFileName, RD_API_KEY) {
     logApi(`[RD PLAY] StremThru proxy pre hash: ${hash}`);
     try {
-        // 1. Pridáme magnet cez StremThru (POST /v0/store/torz)
-        // StremThru zistí či je cachovaný a vráti files[].link (stremthru:// URL)
-        const magnetUri = `magnet:?xt=urn:btih:${hash}`;
-        const addRes = await axios.post(`${STREMTHRU_URL}/v0/store/torz`,
-            { link: magnetUri },
-            {
-                headers: getStremThruHeaders(RD_API_KEY),
-                timeout: 30000
-            }
-        );
-
-        const torzData = addRes.data?.data;
-        if (!torzData || !torzData.files) {
-            return res.status(500).send("StremThru nevrátil platné dáta.");
-        }
-
-        if (torzData.status === 'downloaded') {
-            // Nájdeme správny video súbor
-            const fileName = decodedFileName.split('/').pop() || '';
-            let targetFile = torzData.files.find(f =>
-                (f.name || f.path || '').includes(fileName) || fileName.includes((f.name || f.path || '').split('/').pop())
-            );
-            if (!targetFile) {
-                targetFile = torzData.files.find(f => /\.(mp4|mkv|avi|m4v|mov)$/i.test(f.name || f.path || ''));
-            }
-            if (!targetFile) targetFile = torzData.files[0];
-
-            if (targetFile?.link) {
-                // 2. Vygenerujeme priamy CDN link cez StremThru (valid 12h)
-                const genRes = await axios.post(`${STREMTHRU_URL}/v0/store/torz/link/generate`,
-                    { link: targetFile.link },
-                    {
-                        headers: getStremThruHeaders(RD_API_KEY),
-                        timeout: 15000
-                    }
-                );
-
-                const directUrl = genRes.data?.data?.link;
-                if (directUrl) {
-                    logSuccess(`[RD PLAY] StremThru redirect OK`);
-                    return res.redirect(302, directUrl);
-                }
-            }
-        }
-
-        // Nie je priamo hrateľné – skúsime najprv nájsť existujúci torrent v StremThru
-        // (môže byť už stiahnutý z predchádzajúceho kliku)
-        logApi(`[RD PLAY] Status: ${torzData.status}. Skúšam nájsť existujúci torrent...`);
-        
+        // 0. Najprv skontrolujeme, či torrent už nie je v RD účte
+        let torzData = null;
         try {
             const listRes = await axios.get(`${STREMTHRU_URL}/v0/store/torz`, {
                 headers: getStremThruHeaders(RD_API_KEY),
                 timeout: 10000,
                 params: { hash, limit: 1 }
             });
-            
+
             const existingItems = listRes.data?.data?.items || listRes.data?.data || [];
-            const existingTorz = Array.isArray(existingItems) 
-                ? existingItems.find(t => t.hash?.toLowerCase() === hash.toLowerCase() && t.status === 'downloaded')
+            const existingTorz = Array.isArray(existingItems)
+                ? existingItems.find(t => t.hash?.toLowerCase() === hash.toLowerCase())
                 : null;
-            
-            if (existingTorz?.files?.[0]?.link) {
-                logSuccess(`[RD PLAY] Nájdený existujúci stiahnutý torrent`);
-                const genRes = await axios.post(`${STREMTHRU_URL}/v0/store/torz/link/generate`,
-                    { link: existingTorz.files[0].link },
-                    { headers: getStremThruHeaders(RD_API_KEY), timeout: 15000 }
-                );
-                const directUrl = genRes.data?.data?.link;
-                if (directUrl) return res.redirect(302, directUrl);
+
+            if (existingTorz) {
+                torzData = existingTorz;
+                logApi(`[RD PLAY] Torrent už existuje v RD účte (status: ${existingTorz.status})`);
             }
         } catch (listErr) {
-            logWarn(`[RD PLAY] Chyba pri hľadaní existujúceho torrentu: ${listErr.message}`);
+            logWarn(`[RD PLAY] Chyba pri kontrole existujúceho torrentu: ${listErr.message}`);
         }
-        
-        logApi(`[RD PLAY] Status: ${torzData.status}. Redirecting na /info-video`);
+
+        // 1. Ak torrent nie je v RD účte, pridáme ho (POST /v0/store/torz)
+        if (!torzData) {
+            const magnetUri = `magnet:?xt=urn:btih:${hash}`;
+            try {
+                const addRes = await axios.post(`${STREMTHRU_URL}/v0/store/torz`,
+                    { link: magnetUri },
+                    {
+                        headers: getStremThruHeaders(RD_API_KEY),
+                        timeout: 30000
+                    }
+                );
+
+                torzData = addRes.data?.data;
+                if (torzData) {
+                    logApi(`[RD PLAY] Torrent pridaný do RD (status: ${torzData.status})`);
+                }
+            } catch (addErr) {
+                if (addErr.response?.status === 451 || addErr.response?.data?.code === 'UNAVAILABLE_FOR_LEGAL_REASONS') {
+                    const dekNazov = decodeURIComponent(decodedFileName || '').split('/').pop() || 'neznámy';
+                    logError(`[RD PLAY] StremThru blokuje súbor: ${dekNazov}`);
+                    return res.status(500).send(`Real-Debrid blokuje tento súbor (infringing_file). Skús iný zdroj.`);
+                }
+                // Ak pridanie zlyhalo (možno duplicita), skúsime ešte nájsť v liste
+                logWarn(`[RD PLAY] Pridanie torrentu zlyhalo, skúšam známy list: ${addErr.message}`);
+                try {
+                    const retryRes = await axios.get(`${STREMTHRU_URL}/v0/store/torz`, {
+                        headers: getStremThruHeaders(RD_API_KEY),
+                        timeout: 10000,
+                        params: { hash, limit: 1 }
+                    });
+                    const retryItems = retryRes.data?.data?.items || retryRes.data?.data || [];
+                    torzData = Array.isArray(retryItems)
+                        ? retryItems.find(t => t.hash?.toLowerCase() === hash.toLowerCase())
+                        : null;
+                    if (torzData) logApi(`[RD PLAY] Torrent nájdený v liste po zlyhaní pridania`);
+                } catch (retryErr) {
+                    logWarn(`[RD PLAY] Retry list zlyhal: ${retryErr.message}`);
+                }
+            }
+        }
+
+        // 2. Ak máme torrent (starý aj nový), skúsime ho prehrať
+        if (torzData) {
+            const status = torzData.status?.toLowerCase?.() || torzData.status || '';
+            
+            if (status === 'downloaded' || status === 'cached') {
+                // Nájdeme správny video súbor
+                const fileName = decodedFileName.split('/').pop() || '';
+                let targetFile = null;
+
+                if (torzData.files && Array.isArray(torzData.files)) {
+                    targetFile = torzData.files.find(f =>
+                        (f.name || f.path || '').includes(fileName) || fileName.includes((f.name || f.path || '').split('/').pop())
+                    );
+                    if (!targetFile) {
+                        targetFile = torzData.files.find(f => /\.(mp4|mkv|avi|m4v|mov)$/i.test(f.name || f.path || ''));
+                    }
+                    if (!targetFile) targetFile = torzData.files[0];
+                }
+
+                if (targetFile?.link) {
+                    const genRes = await axios.post(`${STREMTHRU_URL}/v0/store/torz/link/generate`,
+                        { link: targetFile.link },
+                        {
+                            headers: getStremThruHeaders(RD_API_KEY),
+                            timeout: 15000
+                        }
+                    );
+
+                    const directUrl = genRes.data?.data?.link;
+                    if (directUrl) {
+                        logSuccess(`[RD PLAY] StremThru redirect OK`);
+                        return res.redirect(302, directUrl);
+                    }
+                }
+            } else {
+                logApi(`[RD PLAY] Torrent nie je hotový (status: ${status}), /info-video`);
+            }
+        }
+
+        // 3. Fallback: info-video
+        logApi(`[RD PLAY] Redirecting na /info-video`);
         return res.redirect(302, `/info-video`);
 
     } catch (err) {
