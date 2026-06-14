@@ -142,50 +142,57 @@ async function overitTorboxCache(infoHashes, torboxKey) {
     
     const cacheMap = {};
     
-    // 1. Skontrolujeme shared cache (checkcached) – rýchle, existujúca logika
     logApi(`Checking TorBox cache directly for ${unikatneHashe.length} hashes`);
-    try {
-        const res = await axios.get(`https://api.torbox.app/v1/api/torrents/checkcached`, {
-            params: { hash: hashString, format: "list" },
-            headers: { "Authorization": `Bearer ${torboxKey}` },
-            timeout: 5000
-        });
-        
-        if (res.data && res.data.success && res.data.data) {
-            const poleDat = Array.isArray(res.data.data) ? res.data.data : [res.data.data];
-            poleDat.forEach(item => { 
-                if (item && item.hash) cacheMap[item.hash.toLowerCase()] = true; 
-            });
-        }
-    } catch (error) {
-        logError("TorBox checkcached failed", error);
-    }
 
-    // 2. Skontrolujeme aj mylist – user môže mať torrent stiahnutý v osobnom účte,
-    //    aj keď nie je v shared cache (napr. vzácny/privátny torrent)
-    try {
-        const mylistRes = await axios.get("https://api.torbox.app/v1/api/torrents/mylist", {
-            headers: { Authorization: `Bearer ${torboxKey}` },
-            timeout: 5000,
-            params: { bypass_cache: true }
-        });
+    // Oba requesty spustíme paralelne — checkcached aj mylist
+    // nie sú na sebe závislé, oba len píšu cacheMap[hash] = true
+    await Promise.all([
+        // 1. Shared cache (checkcached)
+        (async () => {
+            try {
+                const res = await axios.get(`https://api.torbox.app/v1/api/torrents/checkcached`, {
+                    params: { hash: hashString, format: "list" },
+                    headers: { "Authorization": `Bearer ${torboxKey}` },
+                    timeout: 5000
+                });
 
-        if (mylistRes.data?.success && Array.isArray(mylistRes.data.data)) {
-            for (const item of mylistRes.data.data) {
-                if (!item.hash) continue;
-                const h = item.hash.toLowerCase();
-                // Ak hash hľadáme a torrent je už stiahnutý → označíme ako cached
-                if (unikatneHashe.includes(h) && (item.cached || item.download_finished)) {
-                    if (!cacheMap[h]) {
-                        cacheMap[h] = true;
-                        logCache(`Torrent najdeny v mylist (download_finished): ${h.substring(0,12)}...`);
+                if (res.data && res.data.success && res.data.data) {
+                    const poleDat = Array.isArray(res.data.data) ? res.data.data : [res.data.data];
+                    poleDat.forEach(item => { 
+                        if (item && item.hash) cacheMap[item.hash.toLowerCase()] = true; 
+                    });
+                }
+            } catch (error) {
+                logError("TorBox checkcached failed", error);
+            }
+        })(),
+
+        // 2. Osobný účet (mylist)
+        (async () => {
+            try {
+                const mylistRes = await axios.get("https://api.torbox.app/v1/api/torrents/mylist", {
+                    headers: { Authorization: `Bearer ${torboxKey}` },
+                    timeout: 5000,
+                    params: { bypass_cache: true }
+                });
+
+                if (mylistRes.data?.success && Array.isArray(mylistRes.data.data)) {
+                    for (const item of mylistRes.data.data) {
+                        if (!item.hash) continue;
+                        const h = item.hash.toLowerCase();
+                        if (unikatneHashe.includes(h) && (item.cached || item.download_finished)) {
+                            if (!cacheMap[h]) {
+                                cacheMap[h] = true;
+                                logCache(`Torrent najdeny v mylist (download_finished): ${h.substring(0,12)}...`);
+                            }
+                        }
                     }
                 }
+            } catch (error) {
+                logWarn(`TorBox mylist check failed (volitelne): ${error.message}`);
             }
-        }
-    } catch (error) {
-        logWarn(`TorBox mylist check failed (volitelne): ${error.message}`);
-    }
+        })()
+    ]);
 
     logSuccess(`TorBox cache check complete. Found ${Object.keys(cacheMap).length} cached items (checkcached + mylist).`);
     return cacheMap;
@@ -223,77 +230,79 @@ async function overitRealDebridCache(infoHashes, rdKey) {
 
     logApi(`RD cache check cez StremThru (${unikatneHashe.length} hashov)`);
 
-    // Jeden batch request — StremThru overí cache pre všetky hashe naraz
-    try {
-        const magnetParam = unikatneHashe.map(h => `magnet:?xt=urn:btih:${h}`).join(',');
-        const url = `${STREMTHRU_URL}/v0/store/magnets/check?magnet=${encodeURIComponent(magnetParam)}&client_ip=127.0.0.1&sid=stremio`;
+    // Oba requesty spustíme paralelne — shared cache aj osobný účet
+    await Promise.all([
+        // 1. Shared cache (magnets/check)
+        (async () => {
+            try {
+                const magnetParam = unikatneHashe.map(h => `magnet:?xt=urn:btih:${h}`).join(',');
+                const url = `${STREMTHRU_URL}/v0/store/magnets/check?magnet=${encodeURIComponent(magnetParam)}&client_ip=127.0.0.1&sid=stremio`;
 
-        const response = await axios.get(url, {
-            headers: {
-                "X-StremThru-Store-Name": "realdebrid",
-                "X-StremThru-Store-Authorization": `Bearer ${rdKey}`,
-                "User-Agent": "TorrentSK/1.0"
-            },
-            timeout: 30000
-        });
+                const response = await axios.get(url, {
+                    headers: {
+                        "X-StremThru-Store-Name": "realdebrid",
+                        "X-StremThru-Store-Authorization": `Bearer ${rdKey}`,
+                        "User-Agent": "TorrentSK/1.0"
+                    },
+                    timeout: 30000
+                });
 
-        const data = response.data;
-        if (!data || !data.data || !Array.isArray(data.data.items)) {
-            logWarn(`StremThru vrátil neočakávaný formát`);
-            return {};
-        }
+                const data = response.data;
+                if (!data || !data.data || !Array.isArray(data.data.items)) {
+                    logWarn(`StremThru vrátil neočakávaný formát`);
+                    return;
+                }
 
-        for (const item of data.data.items) {
-            const hash = item.hash ? item.hash.toLowerCase() : null;
-            if (!hash) continue;
-            
-            if (!unikatneHashe.includes(hash)) continue;
+                for (const item of data.data.items) {
+                    const hash = item.hash ? item.hash.toLowerCase() : null;
+                    if (!hash) continue;
+                    if (!unikatneHashe.includes(hash)) continue;
 
-            if (item.status === 'cached') {
-                logSuccess(`RD CACHED cez StremThru: ${hash.substring(0,12)}... (${item.name || '?'})`);
-                cacheMap[hash] = true;
-            } else {
-                logCache(`RD NOT cached: ${hash.substring(0,12)}... (status: ${item.status})`);
-            }
-        }
-
-        logSuccess(`StremThru cache check complete. Found ${Object.keys(cacheMap).length}/${unikatneHashe.length} cached items.`);
-    } catch (error) {
-        if (error.response) {
-            logError(`StremThru API error (HTTP ${error.response.status})`, JSON.stringify(error.response.data).substring(0, 300));
-        } else {
-            logError(`StremThru error: ${error.message || 'unknown'}`);
-        }
-    }
-
-    // 2. Fallback: skontrolujeme aj osobný RD účet cez GET /v0/store/torz
-    //    (rovnako ako TorBox kontroluje mylist — torrent môže byť stiahnutý
-    //    v osobnom účte aj keď nie je v shared cache)
-    const uzNeznameHashe = unikatneHashe.filter(h => !cacheMap[h]);
-    if (uzNeznameHashe.length > 0) {
-        logApi(`RD osobný účet: kontrolujem ${uzNeznameHashe.length} neznámych hashov`);
-        try {
-            const listRes = await axios.get(`${STREMTHRU_URL}/v0/store/torz`, {
-                headers: getStremThruHeaders(RD_API_KEY),
-                timeout: 10000,
-                params: { limit: 1000 }
-            });
-
-            const items = listRes.data?.data?.items || listRes.data?.data || [];
-            if (Array.isArray(items)) {
-                for (const item of items) {
-                    if (!item.hash) continue;
-                    const h = item.hash.toLowerCase();
-                    if (uzNeznameHashe.includes(h) && item.status === 'downloaded') {
-                        cacheMap[h] = true;
-                        logCache(`RD torrent najdeny v osobnom ucte (downloaded): ${h.substring(0,12)}...`);
+                    if (item.status === 'cached') {
+                        logSuccess(`RD CACHED cez StremThru: ${hash.substring(0,12)}... (${item.name || '?'})`);
+                        cacheMap[hash] = true;
+                    } else {
+                        logCache(`RD NOT cached: ${hash.substring(0,12)}... (status: ${item.status})`);
                     }
                 }
+            } catch (error) {
+                if (error.response) {
+                    logError(`StremThru API error (HTTP ${error.response.status})`, JSON.stringify(error.response.data).substring(0, 300));
+                } else {
+                    logError(`StremThru error: ${error.message || 'unknown'}`);
+                }
             }
-        } catch (listErr) {
-            logWarn(`RD osobný účet check failed (volitelne): ${listErr.message}`);
-        }
-    }
+        })(),
+
+        // 2. Osobný RD účet (GET /v0/store/torz)
+        (async () => {
+            try {
+                const listRes = await axios.get(`${STREMTHRU_URL}/v0/store/torz`, {
+                    headers: getStremThruHeaders(rdKey),
+                    timeout: 10000,
+                    params: { limit: 1000 }
+                });
+
+                const items = listRes.data?.data?.items || listRes.data?.data || [];
+                if (Array.isArray(items)) {
+                    for (const item of items) {
+                        if (!item.hash) continue;
+                        const h = item.hash.toLowerCase();
+                        // Kontrolujeme vsetky hashe — ak uz je v cacheMap z kroku 1,
+                        // prepisanie true->true je neškodné
+                        if (unikatneHashe.includes(h) && item.status === 'downloaded') {
+                            if (!cacheMap[h]) {
+                                cacheMap[h] = true;
+                                logCache(`RD torrent najdeny v osobnom ucte (downloaded): ${h.substring(0,12)}...`);
+                            }
+                        }
+                    }
+                }
+            } catch (listErr) {
+                logWarn(`RD osobný účet check failed (volitelne): ${listErr.message}`);
+            }
+        })()
+    ]);
 
     return cacheMap;
 }
