@@ -2164,28 +2164,30 @@ app.get('/:config/stream/:type/:id.json', async (req, res) => {
         pokus++;
     }
 
-    const predNameFiltrom = torrenty.length;
-    torrenty = torrenty.filter(t => {
-        let rawName = odstranDiakritiku(t.name.toLowerCase()).replace(/^stiahni si\s*/i, "").trim();
-        const prefixRe = /^(?:filmy|film|serialy|serial|seriál|seria|serie|dokumenty|dokument|tv|kreslene|kreslené|anime)\b/i;
-        const junkRe = /^(?:\s+|[-–_|/]+|\[[^\]]*]|\([^)]+\)|1080p|720p|2160p|4k|hdr|web[-\s]?dl|webrip|brrip|bluray|dvdrip|tvrip|cz|sk|en)\b/i;
-        
-        let prev;
-        do {
-            prev = rawName;
-            rawName = rawName.replace(prefixRe, "").trim();
-            rawName = rawName.replace(junkRe, "").trim();
-        } while (rawName !== prev);
+    if (!uspesneNajdeneCezCsfd) {
+        const predNameFiltrom = torrenty.length;
+        torrenty = torrenty.filter(t => {
+            let rawName = odstranDiakritiku(t.name.toLowerCase()).replace(/^stiahni si\s*/i, "").trim();
+            const prefixRe = /^(?:filmy|film|serialy|serial|seriál|seria|serie|dokumenty|dokument|tv|kreslene|kreslené|anime)\b/i;
+            const junkRe = /^(?:\s+|[-–_|/]+|\[[^\]]*]|\([^)]+\)|1080p|720p|2160p|4k|hdr|web[-\s]?dl|webrip|brrip|bluray|dvdrip|tvrip|cz|sk|en)\b/i;
+            
+            let prev;
+            do {
+                prev = rawName;
+                rawName = rawName.replace(prefixRe, "").trim();
+                rawName = rawName.replace(junkRe, "").trim();
+            } while (rawName !== prev);
 
-        for (const nazov of unikatneNazvy) {
-            const hl = odstranDiakritiku(nazov.toLowerCase()).trim();
-            if (!hl) continue;
-            const escaped = hl.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-            if (new RegExp(`^${escaped}\\b`, "i").test(rawName)) return true;
-        }
-        return false;
-    });
-    logInfo(`Title accuracy filter complete. Remaining: ${torrenty.length} (filtered out ${predNameFiltrom - torrenty.length} unrelated titles)`);
+            for (const nazov of unikatneNazvy) {
+                const hl = odstranDiakritiku(nazov.toLowerCase()).trim();
+                if (!hl) continue;
+                const escaped = hl.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+                if (new RegExp(`^${escaped}\\b`, "i").test(rawName)) return true;
+            }
+            return false;
+        });
+        logInfo(`Title accuracy filter complete. Remaining: ${torrenty.length} (filtered out ${predNameFiltrom - torrenty.length} unrelated titles)`);
+    }
 
     if (seria !== undefined) {
         logInfo(`Filtering series torrents for S${seria} E${epizoda}...`);
