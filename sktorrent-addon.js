@@ -1274,7 +1274,19 @@ app.get(['/configure', '/:config/configure'], (req, res) => {
                 <div class="section-header"><span class="icon">🔌</span> <span data-i18n="section.connection">Connection</span></div>
                 <div class="section-desc" data-i18n="desc.connection">Prihlasovacie údaje a API kľúče</div>
                 
-                <!-- Login cez SKTorrent — hidden pre debrid-only -->
+                <!-- Najprv výber služby -->
+                <div class="field" id="debridServiceField">
+                    <label data-i18n="label.debrid">Debrid služba</label>
+                    <select id="debridProvider" onchange="toggleDebridFields()">
+                        <option value="" ${getSelect('debridProvider','','') || (!currentConfig.debridProvider && !currentConfig.torbox ? 'selected' : '')} data-i18n="debrid.choose">— Vyber —</option>
+                        <option value="p2p" data-i18n="debrid.p2p">Klasický torrent (P2P)</option>
+                        <option value="torbox" ${getSelect('debridProvider','torbox','') || (currentConfig.torbox && !currentConfig.debridProvider ? 'selected' : '')}>TorBox</option>
+                        <option value="realdebrid" ${getSelect('debridProvider','realdebrid','')}>Real-Debrid</option>
+                    </select>
+                </div>
+
+                <!-- SKTorrent login — zobrazí sa len pre P2P -->
+                <div id="sktorrentSection" style="display:${(!currentConfig.debridProvider && !currentConfig.torbox) || currentConfig.debridProvider === 'p2p' ? 'block' : 'none'};padding-left:16px;border-left:2px solid #333;margin:0 20px 8px;">
                 <div class="field" id="loginFields" style="display:block;">
                     <label>🔑 <span data-i18n="label.sktorrentLogin">Prihlásiť sa na SKTorrent</span></label>
                     <div style="display:flex;gap:8px;flex-wrap:wrap;">
@@ -1293,7 +1305,7 @@ app.get(['/configure', '/:config/configure'], (req, res) => {
                 </div>
                 
                 <!-- Manual fallback - ak niekto chce rucne zadat uid/pass -->
-                <div style="padding:0 20px 8px;">
+                <div style="padding:0 0 8px;">
                     <a href="#" onclick="toggleManualFields(event)" style="font-size:12px;color:#666;text-decoration:none;" data-i18n="link.manual">▶ Manuálne zadať UID a PASS</a>
                 </div>
                 <div id="manualFields" style="display:none;">
@@ -1309,14 +1321,6 @@ app.get(['/configure', '/:config/configure'], (req, res) => {
                     </div>
                 </div>
                 </div>
-                <div class="field" id="debridServiceField">
-                    <label data-i18n="label.debrid">Debrid služba</label>
-                    <select id="debridProvider" onchange="toggleDebridFields()">
-                        <option value="" ${getSelect('debridProvider','','') || (!currentConfig.debridProvider && !currentConfig.torbox ? 'selected' : '')} data-i18n="debrid.choose">— Vyber —</option>
-                        <option value="p2p" data-i18n="debrid.p2p">Klasický torrent (P2P)</option>
-                        <option value="torbox" ${getSelect('debridProvider','torbox','') || (currentConfig.torbox && !currentConfig.debridProvider ? 'selected' : '')}>TorBox</option>
-                        <option value="realdebrid" ${getSelect('debridProvider','realdebrid','')}>Real-Debrid</option>
-                    </select>
                 </div>
                 <div class="field" id="torboxField" style="display:${currentConfig.debridProvider === 'torbox' || (!currentConfig.debridProvider && currentConfig.torbox) ? '' : 'none'};">
                     <label data-i18n="label.torbox">TorBox API kľúč</label>
@@ -1893,19 +1897,14 @@ app.get(['/configure', '/:config/configure'], (req, res) => {
                 var provider = document.getElementById('debridProvider').value;
                 var torboxField = document.getElementById('torboxField');
                 var realdebridField = document.getElementById('realdebridField');
-                var loginFields = document.getElementById('loginFields');
-                var manualSection = document.getElementById('manualSection');
-                var hiddenCredentials = document.getElementById('hiddenCredentials');
+                var sktorrentSection = document.getElementById('sktorrentSection');
                 
                 // Debrid API fields
                 if (torboxField) torboxField.style.display = (provider === 'torbox') ? '' : 'none';
                 if (realdebridField) realdebridField.style.display = (provider === 'realdebrid') ? '' : 'none';
                 
                 // SKTorrent login: len pre P2P mód
-                var ukazLogin = (provider === 'p2p');
-                if (loginFields) loginFields.style.display = ukazLogin ? 'block' : 'none';
-                if (manualSection) manualSection.style.display = ukazLogin ? '' : 'none';
-                if (hiddenCredentials) hiddenCredentials.style.display = ukazLogin ? '' : 'none';
+                if (sktorrentSection) sktorrentSection.style.display = (provider === 'p2p') ? 'block' : 'none';
             }
 
             function toggleManualFields(e) {
