@@ -1198,60 +1198,60 @@ app.get(['/configure', '/:config/configure'], (req, res) => {
         <title>TorrentSK</title>
         <style>
             * { margin: 0; padding: 0; box-sizing: border-box; }
-            body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #0d0d0d; color: #e0e0e0; display: flex; justify-content: center; padding: 30px 15px; }
-            .container { background: #1a1a2e; padding: 0; border-radius: 12px; width: 100%; max-width: 500px; box-shadow: 0 8px 32px rgba(0,0,0,0.6); overflow: hidden; }
-            .header { background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%); padding: 24px; text-align: center; border-bottom: 1px solid #2a2a4a; }
-            .header h2 { font-size: 22px; font-weight: 700; background: linear-gradient(135deg, #8A5A9E, #e040a0); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
+            body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #0a0f09; color: #e0e0e0; display: flex; justify-content: center; padding: 30px 15px; }
+            .container { background: #132210; padding: 0; border-radius: 12px; width: 100%; max-width: 500px; box-shadow: 0 8px 32px rgba(0,0,0,0.6); overflow: hidden; }
+            .header { background: linear-gradient(135deg, #162f12 0%, #0d1f0a 100%); padding: 24px; text-align: center; border-bottom: 1px solid #2a4520; }
+            .header h2 { font-size: 22px; font-weight: 700; background: linear-gradient(135deg, #76B83E, #9DE062); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
             .header p { font-size: 13px; color: #888; margin-top: 6px; }
 
-            .section { border-bottom: 1px solid #2a2a4a; }
+            .section { border-bottom: 1px solid #2a4520; }
             .section:last-child { border-bottom: none; }
-            .section-header { display: flex; align-items: center; gap: 10px; padding: 16px 20px 8px; font-size: 13px; font-weight: 600; color: #8A5A9E; text-transform: uppercase; letter-spacing: 0.5px; }
+            .section-header { display: flex; align-items: center; gap: 10px; padding: 16px 20px 8px; font-size: 13px; font-weight: 600; color: #76B83E; text-transform: uppercase; letter-spacing: 0.5px; }
             .section-header .icon { font-size: 18px; }
             .section-desc { padding: 0 20px 12px; font-size: 12px; color: #666; }
 
             .field { padding: 8px 20px; }
             .field label { display: block; font-size: 12px; font-weight: 600; color: #aaa; margin-bottom: 4px; }
-            .field input, .field select { width: 100%; padding: 10px 12px; background: #0d0d1a; border: 1px solid #2a2a4a; color: #e0e0e0; border-radius: 8px; font-size: 14px; outline: none; transition: border 0.2s; }
-            .field input:focus, .field select:focus { border-color: #8A5A9E; }
+            .field input, .field select { width: 100%; padding: 10px 12px; background: #0d1a0b; border: 1px solid #2a4520; color: #e0e0e0; border-radius: 8px; font-size: 14px; outline: none; transition: border 0.2s; }
+            .field input:focus, .field select:focus { border-color: #76B83E; }
             .field select { cursor: pointer; appearance: auto; }
 
             .checkbox-row { display: flex; align-items: center; gap: 10px; padding: 6px 20px; cursor: pointer; }
-            .checkbox-row:hover { background: rgba(138,90,158,0.05); }
-            .checkbox-row input[type="checkbox"] { width: 18px; height: 18px; accent-color: #8A5A9E; cursor: pointer; }
+            .checkbox-row:hover { background: rgba(118,184,62,0.05); }
+            .checkbox-row input[type="checkbox"] { width: 18px; height: 18px; accent-color: #76B83E; cursor: pointer; }
             .checkbox-row .label-text { font-size: 14px; color: #ccc; }
             .checkbox-row .label-desc { font-size: 11px; color: #666; margin-left: auto; }
 
             .chip-group { display: flex; flex-wrap: wrap; gap: 6px; padding: 6px 20px; }
-            .chip { display: inline-flex; align-items: center; gap: 5px; padding: 6px 12px; background: #0d0d1a; border: 1px solid #2a2a4a; border-radius: 20px; font-size: 13px; color: #ccc; cursor: pointer; transition: all 0.2s; user-select: none; }
-            .chip:hover { border-color: #8A5A9E; }
-            .chip.active { background: #8A5A9E6; border-color: #8A5A9E; color: #fff; background: rgba(138,90,158,0.25); }
+            .chip { display: inline-flex; align-items: center; gap: 5px; padding: 6px 12px; background: #0d1a0b; border: 1px solid #2a4520; border-radius: 20px; font-size: 13px; color: #ccc; cursor: pointer; transition: all 0.2s; user-select: none; }
+            .chip:hover { border-color: #76B83E; }
+            .chip.active { border-color: #76B83E; color: #d4edc9; background: rgba(118,184,62,0.2); }
 
             .sort-row { display: flex; align-items: center; gap: 8px; padding: 6px 20px; }
-            .sort-row .num { width: 22px; height: 22px; display: flex; align-items: center; justify-content: center; background: #0d0d1a; border: 1px solid #2a2a4a; border-radius: 50%; font-size: 11px; color: #666; flex-shrink: 0; }
-            .sort-row select { flex: 1; padding: 8px 10px; background: #0d0d1a; border: 1px solid #2a2a4a; color: #e0e0e0; border-radius: 8px; font-size: 13px; outline: none; cursor: pointer; }
-            .sort-row select:focus { border-color: #8A5A9E; }
-            .sort-btn { width: 28px; height: 28px; display: flex; align-items: center; justify-content: center; background: #0d0d1a; border: 1px solid #2a2a4a; border-radius: 6px; color: #666; cursor: pointer; font-size: 14px; flex-shrink: 0; transition: all 0.2s; }
-            .sort-btn:hover { border-color: #8A5A9E; color: #8A5A9E; }
+            .sort-row .num { width: 22px; height: 22px; display: flex; align-items: center; justify-content: center; background: #0d1a0b; border: 1px solid #2a4520; border-radius: 50%; font-size: 11px; color: #666; flex-shrink: 0; }
+            .sort-row select { flex: 1; padding: 8px 10px; background: #0d1a0b; border: 1px solid #2a4520; color: #e0e0e0; border-radius: 8px; font-size: 13px; outline: none; cursor: pointer; }
+            .sort-row select:focus { border-color: #76B83E; }
+            .sort-btn { width: 28px; height: 28px; display: flex; align-items: center; justify-content: center; background: #0d1a0b; border: 1px solid #2a4520; border-radius: 6px; color: #666; cursor: pointer; font-size: 14px; flex-shrink: 0; transition: all 0.2s; }
+            .sort-btn:hover { border-color: #76B83E; color: #76B83E; }
             .sort-btn:disabled { opacity: 0.3; cursor: not-allowed; }
-            .sort-toggle { width: 22px; height: 22px; display: flex; align-items: center; justify-content: center; background: transparent; border: none; color: #8A5A9E; cursor: pointer; font-size: 16px; flex-shrink: 0; padding: 0; transition: opacity 0.2s; }
+            .sort-toggle { width: 22px; height: 22px; display: flex; align-items: center; justify-content: center; background: transparent; border: none; color: #76B83E; cursor: pointer; font-size: 16px; flex-shrink: 0; padding: 0; transition: opacity 0.2s; }
             .sort-toggle:hover { opacity: 0.7; }
 
-            .btn-primary { width: calc(100% - 40px); margin: 16px 20px; padding: 12px; background: linear-gradient(135deg, #8A5A9E, #e040a0); color: white; border: none; font-size: 15px; font-weight: 600; border-radius: 8px; cursor: pointer; transition: all 0.2s; }
-            .btn-primary:hover { transform: translateY(-1px); box-shadow: 0 4px 15px rgba(138,90,158,0.4); }
+            .btn-primary { width: calc(100% - 40px); margin: 16px 20px; padding: 12px; background: linear-gradient(135deg, #76B83E, #5A9A2E); color: white; border: none; font-size: 15px; font-weight: 600; border-radius: 8px; cursor: pointer; transition: all 0.2s; }
+            .btn-primary:hover { transform: translateY(-1px); box-shadow: 0 4px 15px rgba(118,184,62,0.4); }
 
-            #result-box { display: none; margin: 0 20px 20px; padding: 20px; background: rgba(138,90,158,0.08); border: 1px solid #8A5A9E; border-radius: 10px; text-align: center; }
-            #result-box p { font-size: 12px; color: #8A5A9E; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 12px; }
-            #generated-url { width: 100%; font-size: 12px; font-family: 'Courier New', monospace; padding: 10px; margin-bottom: 14px; background: #0d0d1a; color: #e0e0e0; border: 1px solid #2a2a4a; border-radius: 8px; word-break: break-all; resize: none; height: 52px; outline: none; transition: border 0.2s; }
-            #generated-url:focus { border-color: #8A5A9E; }
-            .btn-sm { padding: 8px 16px; border: 1px solid #2a2a4a; border-radius: 8px; font-size: 13px; cursor: pointer; margin: 3px; transition: all 0.2s; }
-            .btn-copy { background: #0d0d1a; color: #ccc; }
-            .btn-copy:hover { background: rgba(138,90,158,0.25); border-color: #8A5A9E; color: #fff; }
-            .btn-install { background: linear-gradient(135deg, #8A5A9E, #e040a0); color: white; border: none; }
-            .btn-install:hover { transform: translateY(-1px); box-shadow: 0 4px 15px rgba(138,90,158,0.4); }
-            .lang-btn { background:none; border:1px solid #2a2a4a; border-radius:6px; padding:4px 10px; font-size:13px; color:#ccc; cursor:pointer; transition:all 0.2s; }
-            .lang-btn:hover { border-color: #8A5A9E; }
-            .lang-btn.active { border-color: #8A5A9E; background: rgba(138,90,158,0.2); color:#fff; }
+            #result-box { display: none; margin: 0 20px 20px; padding: 20px; background: rgba(118,184,62,0.06); border: 1px solid #76B83E; border-radius: 10px; text-align: center; }
+            #result-box p { font-size: 12px; color: #76B83E; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 12px; }
+            #generated-url { width: 100%; font-size: 12px; font-family: 'Courier New', monospace; padding: 10px; margin-bottom: 14px; background: #0d1a0b; color: #e0e0e0; border: 1px solid #2a4520; border-radius: 8px; word-break: break-all; resize: none; height: 52px; outline: none; transition: border 0.2s; }
+            #generated-url:focus { border-color: #76B83E; }
+            .btn-sm { padding: 8px 16px; border: 1px solid #2a4520; border-radius: 8px; font-size: 13px; cursor: pointer; margin: 3px; transition: all 0.2s; }
+            .btn-copy { background: #0d1a0b; color: #ccc; }
+            .btn-copy:hover { background: rgba(118,184,62,0.2); border-color: #76B83E; color: #fff; }
+            .btn-install { background: linear-gradient(135deg, #76B83E, #5A9A2E); color: white; border: none; }
+            .btn-install:hover { transform: translateY(-1px); box-shadow: 0 4px 15px rgba(118,184,62,0.4); }
+            .lang-btn { background:none; border:1px solid #2a4520; border-radius:6px; padding:4px 10px; font-size:13px; color:#ccc; cursor:pointer; transition:all 0.2s; }
+            .lang-btn:hover { border-color: #76B83E; }
+            .lang-btn.active { border-color: #76B83E; background: rgba(118,184,62,0.2); color:#d4edc9; }
         </style>
     </head>
     <body>
@@ -1294,7 +1294,7 @@ app.get(['/configure', '/:config/configure'], (req, res) => {
                         <input type="password" id="loginPass" data-i18n-placeholder="login.pass.placeholder" placeholder="Heslo" style="flex:1;min-width:120px;">
                     </div>
                     <div style="display:flex;gap:8px;margin-top:6px;flex-wrap:wrap;">
-                        <button id="loginBtn" onclick="loginToSKTorrent()" style="padding:8px 16px;background:linear-gradient(135deg,#8A5A9E,#e040a0);color:white;border:none;border-radius:8px;font-size:13px;font-weight:600;cursor:pointer;white-space:nowrap;" data-i18n="button.login">Prihlásiť sa</button>
+                        <button id="loginBtn" onclick="loginToSKTorrent()" style="padding:8px 16px;background:linear-gradient(135deg,#76B83E,#5A9A2E);color:white;border:none;border-radius:8px;font-size:13px;font-weight:600;cursor:pointer;white-space:nowrap;" data-i18n="button.login">Prihlásiť sa</button>
                         <a href="https://sktorrent.eu/torrent/account.php" target="_blank" rel="noopener" style="padding:8px 16px;background:#333;color:#999;border:none;border-radius:8px;font-size:13px;font-weight:400;cursor:pointer;text-decoration:none;display:inline-flex;align-items:center;" data-i18n="button.register">Registrovať sa</a>
                     </div>
                     <div id="loginStatus" style="font-size:12px;margin-top:6px;"></div>
@@ -1328,22 +1328,22 @@ app.get(['/configure', '/:config/configure'], (req, res) => {
                 <div class="field" id="torboxField" style="display:${currentConfig.debridProvider === 'torbox' || (!currentConfig.debridProvider && currentConfig.torbox) ? '' : 'none'};">
                     <label data-i18n="label.torbox">TorBox API kľúč</label>
                     <input type="text" id="torbox" data-i18n-placeholder="torbox.placeholder" placeholder="TorBox token" value="${getVal('torbox')}">
-                    <div style="font-size:11px;color:#666;margin-top:2px;"><a href="https://torbox.app/settings?section=account" target="_blank" rel="noopener" style="color:#8A5A9E;text-decoration:none;" data-i18n-link="torbox.help">🔗 torbox.app/settings?section=account</a></div>
+                    <div style="font-size:11px;color:#666;margin-top:2px;"><a href="https://torbox.app/settings?section=account" target="_blank" rel="noopener" style="color:#76B83E;text-decoration:none;" data-i18n-link="torbox.help">🔗 torbox.app/settings?section=account</a></div>
                 </div>
                 <div class="field" id="realdebridField" style="display:${currentConfig.debridProvider === 'realdebrid' ? '' : 'none'};">
                     <label data-i18n="label.realdebrid">Real-Debrid API kľúč</label>
                     <input type="text" id="realdebrid" data-i18n-placeholder="realdebrid.placeholder" placeholder="Real-Debrid API token" value="${getVal('realdebrid')}">
-                    <div style="font-size:11px;color:#666;margin-top:2px;"><a href="https://real-debrid.com/devices" target="_blank" rel="noopener" style="color:#8A5A9E;text-decoration:none;" data-i18n-link="realdebrid.help">🔗 real-debrid.com/devices</a></div>
+                    <div style="font-size:11px;color:#666;margin-top:2px;"><a href="https://real-debrid.com/devices" target="_blank" rel="noopener" style="color:#76B83E;text-decoration:none;" data-i18n-link="realdebrid.help">🔗 real-debrid.com/devices</a></div>
                 </div>
                 <div class="field">
                     <label><span data-i18n="label.tmdb">TMDB API kľúč</span> <span style="color:#666;font-weight:400;" data-i18n-optional="label.tmdb.optional">(voliteľné)</span></label>
                     <input type="text" id="tmdb" data-i18n-placeholder="tmdb.placeholder" placeholder="TMDB token" value="${getVal('tmdb')}">
-                    <div style="font-size:11px;color:#666;margin-top:2px;"><a href="https://www.themoviedb.org/settings/api" target="_blank" rel="noopener" style="color:#8A5A9E;text-decoration:none;" data-i18n-link="tmdb.help">🔗 themoviedb.org/settings/api</a></div>
+                    <div style="font-size:11px;color:#666;margin-top:2px;"><a href="https://www.themoviedb.org/settings/api" target="_blank" rel="noopener" style="color:#76B83E;text-decoration:none;" data-i18n-link="tmdb.help">🔗 themoviedb.org/settings/api</a></div>
                 </div>
                 <div class="field" style="padding-bottom:16px;">
                     <label><span data-i18n="label.tvdb">TVDB API kľúč</span> <span style="color:#666;font-weight:400;" data-i18n-optional="label.tvdb.optional">(voliteľné)</span></label>
                     <input type="text" id="tvdb" data-i18n-placeholder="tvdb.placeholder" placeholder="TVDB token" value="${getVal('tvdb')}">
-                    <div style="font-size:11px;color:#666;margin-top:2px;"><a href="https://thetvdb.com/dashboard/account/apikey" target="_blank" rel="noopener" style="color:#8A5A9E;text-decoration:none;" data-i18n-link="tvdb.help">🔗 thetvdb.com/dashboard/account/apikey</a></div>
+                    <div style="font-size:11px;color:#666;margin-top:2px;"><a href="https://thetvdb.com/dashboard/account/apikey" target="_blank" rel="noopener" style="color:#76B83E;text-decoration:none;" data-i18n-link="tvdb.help">🔗 thetvdb.com/dashboard/account/apikey</a></div>
                 </div>
             </div>
 
