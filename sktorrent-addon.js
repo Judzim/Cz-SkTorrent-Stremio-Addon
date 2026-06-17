@@ -1274,8 +1274,8 @@ app.get(['/configure', '/:config/configure'], (req, res) => {
                 <div class="section-header"><span class="icon">🔌</span> <span data-i18n="section.connection">Connection</span></div>
                 <div class="section-desc" data-i18n="desc.connection">Prihlasovacie údaje a API kľúče</div>
                 
-                <!-- Login cez SKTorrent -->
-                <div class="field" id="loginFields">
+                <!-- Login cez SKTorrent — hidden pre debrid-only -->
+                <div class="field" id="loginFields" style="display:block;">
                     <label>🔑 <span data-i18n="label.sktorrentLogin">Prihlásiť sa na SKTorrent</span></label>
                     <div style="display:flex;gap:8px;flex-wrap:wrap;">
                         <input type="text" id="loginUser" data-i18n-placeholder="login.uid.placeholder" placeholder="Používateľské meno" style="flex:1;min-width:120px;">
@@ -1285,6 +1285,7 @@ app.get(['/configure', '/:config/configure'], (req, res) => {
                     <div id="loginStatus" style="font-size:12px;margin-top:6px;"></div>
                 </div>
                 
+                <div id="manualSection">
                 <!-- Hidden uid/pass fields (vyplnia sa automaticky po prihlásení) -->
                 <div id="hiddenCredentials" style="display:none;">
                     <input type="hidden" id="uid" value="">
@@ -1307,10 +1308,12 @@ app.get(['/configure', '/:config/configure'], (req, res) => {
                         <div style="font-size:11px;color:#666;margin-top:2px;" data-i18n="pass.help">ℹ️ Nájdeš v cookies po prihlásení na sktorrent.eu</div>
                     </div>
                 </div>
+                </div>
                 <div class="field" id="debridServiceField">
                     <label data-i18n="label.debrid">Debrid služba</label>
                     <select id="debridProvider" onchange="toggleDebridFields()">
-                        <option value="" ${getSelect('debridProvider','','') || (!currentConfig.debridProvider && !currentConfig.torbox ? 'selected' : '')} data-i18n="debrid.p2p">P2P (žiadny debrid)</option>
+                        <option value="" ${getSelect('debridProvider','','') || (!currentConfig.debridProvider && !currentConfig.torbox ? 'selected' : '')} data-i18n="debrid.choose">— Vyber —</option>
+                        <option value="p2p" data-i18n="debrid.p2p">Klasický torrent (P2P)</option>
                         <option value="torbox" ${getSelect('debridProvider','torbox','') || (currentConfig.torbox && !currentConfig.debridProvider ? 'selected' : '')}>TorBox</option>
                         <option value="realdebrid" ${getSelect('debridProvider','realdebrid','')}>Real-Debrid</option>
                     </select>
@@ -1484,7 +1487,8 @@ app.get(['/configure', '/:config/configure'], (req, res) => {
                     'pass.help': 'ℹ️ Nájdeš v cookies po prihlásení na sktorrent.eu',
                     'pass.placeholder': 'Tvoj pass',
                     'label.debrid': 'Debrid služba',
-                    'debrid.p2p': 'P2P (žiadny debrid)',
+                    'debrid.choose': '— Vyber —',
+                    'debrid.p2p': 'Klasický torrent (P2P)',
                     'label.realdebrid': 'Real-Debrid API kľúč',
                     'realdebrid.placeholder': 'Real-Debrid API token',
                     'realdebrid.help': '🔗 real-debrid.com/devices',
@@ -1529,7 +1533,7 @@ app.get(['/configure', '/:config/configure'], (req, res) => {
                     'result.title': 'Tvoj inštalačný odkaz',
                     'button.copy': '📋 Kopírovať',
                     'button.install': '🚀 Inštalovať',
-                    'alert.fillUidPass': 'Prosím, vyplň aspoň UID a pass pre SKTorrent.',
+                    'alert.fillUidPass': 'Pre P2P režim vyplň SKTorrent UID a PASS, alebo vyber TorBox/Real-Debrid.',
                     'alert.codeError': 'Chyba pri generovaní kódu.',
                     'button.copied': 'Skopírované!',
                     'button.copyIdle': 'Kopírovať',
@@ -1564,7 +1568,8 @@ app.get(['/configure', '/:config/configure'], (req, res) => {
                     'pass.help': 'ℹ️ Found in cookies after logging in at sktorrent.eu',
                     'pass.placeholder': 'Your pass',
                     'label.debrid': 'Debrid Service',
-                    'debrid.p2p': 'P2P (no debrid)',
+                    'debrid.choose': '— Choose —',
+                    'debrid.p2p': 'Classic torrent (P2P)',
                     'label.realdebrid': 'Real-Debrid API Key',
                     'realdebrid.placeholder': 'Real-Debrid API token',
                     'realdebrid.help': '🔗 real-debrid.com/devices',
@@ -1610,7 +1615,7 @@ app.get(['/configure', '/:config/configure'], (req, res) => {
                     'result.title': 'Your install link',
                     'button.copy': '📋 Copy',
                     'button.install': '🚀 Install',
-                    'alert.fillUidPass': 'Please fill in at least UID and pass for SKTorrent.',
+                    'alert.fillUidPass': 'For P2P mode fill SKTorrent UID and PASS, or choose TorBox/Real-Debrid.',
                     'alert.codeError': 'Error generating code.',
                     'button.copied': 'Copied!',
                     'button.copyIdle': 'Copy',
@@ -1830,10 +1835,17 @@ app.get(['/configure', '/:config/configure'], (req, res) => {
                     cb: Date.now()
                 };
 
-                if(!config.uid || !config.pass) {
+                var debridProvider = document.getElementById('debridProvider').value;
+
+                if ((!config.uid || !config.pass) && (!debridProvider || debridProvider === 'p2p')) {
                     alert(t('alert.fillUidPass'));
                     return;
                 }
+                
+                // Ak je debrid, uid/pass nie su potrebne — pouzijeme placeholder aby
+                // server neodmietol config (uid/pass sa ignoruju pre debrid)
+                if (!config.uid) config.uid = '';
+                if (!config.pass) config.pass = '';
 
                 try {
                     var jsonString = JSON.stringify(config);
@@ -1881,8 +1893,19 @@ app.get(['/configure', '/:config/configure'], (req, res) => {
                 var provider = document.getElementById('debridProvider').value;
                 var torboxField = document.getElementById('torboxField');
                 var realdebridField = document.getElementById('realdebridField');
+                var loginFields = document.getElementById('loginFields');
+                var manualSection = document.getElementById('manualSection');
+                var hiddenCredentials = document.getElementById('hiddenCredentials');
+                
+                // Debrid API fields
                 if (torboxField) torboxField.style.display = (provider === 'torbox') ? '' : 'none';
                 if (realdebridField) realdebridField.style.display = (provider === 'realdebrid') ? '' : 'none';
+                
+                // SKTorrent login: len pre P2P mód
+                var ukazLogin = (provider === 'p2p');
+                if (loginFields) loginFields.style.display = ukazLogin ? 'block' : 'none';
+                if (manualSection) manualSection.style.display = ukazLogin ? '' : 'none';
+                if (hiddenCredentials) hiddenCredentials.style.display = ukazLogin ? '' : 'none';
             }
 
             function toggleManualFields(e) {
