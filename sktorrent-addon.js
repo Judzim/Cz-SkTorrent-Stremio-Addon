@@ -975,7 +975,10 @@ if (videoSubory.length === 1) {
     if (/\bhdrip\b/i.test(cistyNazov)) sourceTypes.push('hdrip');
     if (/\bppv\b/i.test(cistyNazov)) sourceTypes.push('ppv');
     if (/\b(?:remux|remastered)\b/i.test(cistyNazov)) sourceTypes.push('remux');
-    if (/\b(?:cam|tsrip|tele(?:sync|cine))\b/i.test(cistyNazov)) sourceTypes.push('cam');
+    if (/\b(?:cam|tsrip|tele(?:sync|cine)|kino(?:rip)?)\b/i.test(cistyNazov)) sourceTypes.push('cam');
+    if (/\b(?:scr(?:eener)?|dvdscr|bdscr|dvdscreener)\b/i.test(cistyNazov)) sourceTypes.push('screener');
+    if (/\bvodrip\b|\bvod[-.\s]?rip\b/i.test(cistyNazov)) sourceTypes.push('vodrip');
+    if (/\b(?:tvrip|satrip|dvbrip)\b/i.test(cistyNazov)) sourceTypes.push('tvrip');
     const sourceTag = sourceTypes.length > 0 ? sourceTypes.join(',') : 'neznámy';
     const kvalitaText = kvality.length > 0 ? `🎥 ${kvality.join(" • ")}` : "🎥 Kvalita neznáma";
 
@@ -1403,6 +1406,10 @@ app.get(['/configure', '/:config/configure'], (req, res) => {
                     <span class="chip active" data-source="hdrip" onclick="toggleChip(this)">HDRip</span>
                     <span class="chip active" data-source="ppv" onclick="toggleChip(this)">PPV</span>
                     <span class="chip active" data-source="remux" onclick="toggleChip(this)">Remux</span>
+                    <span class="chip active" data-source="cam" onclick="toggleChip(this)" style="border-color:#663;">CAM / KINO</span>
+                    <span class="chip active" data-source="screener" onclick="toggleChip(this)" style="border-color:#663;">Screener</span>
+                    <span class="chip active" data-source="vodrip" onclick="toggleChip(this)" style="border-color:#553;">VODRip</span>
+                    <span class="chip active" data-source="tvrip" onclick="toggleChip(this)" style="border-color:#553;">TVRip</span>
                 </div>
                 <div style="padding: 0 20px 8px;font-size:11px;color:#555;" data-i18n="hint.allSources">Prázdne = všetky zdroje</div>
 
@@ -1477,6 +1484,7 @@ app.get(['/configure', '/:config/configure'], (req, res) => {
         </div>
 
         <script>
+            // SORT_OPTIONS = poradie aj identita riadkov; select neni potrebný
             var SORT_OPTIONS = ['cached', 'quality', 'lang', 'seeds', 'size'];
             var SORT_LABELS = { cached: 'Cached', quality: 'Rozlíšenie', lang: 'Jazyk', seeds: 'Seedy', size: 'Veľkosť' };
             var CURR_LANG = localStorage.getItem('sktorrent_lang') || 'sk';
@@ -1681,8 +1689,7 @@ app.get(['/configure', '/:config/configure'], (req, res) => {
                     var activeMask = [];
                     var rows = sortContainer.querySelectorAll('.sort-row');
                     for (var si = 0; si < rows.length; si++) {
-                        var sel = rows[si].querySelector('.sort-select');
-                        if (sel) vals.push(sel.value);
+                        vals.push(rows[si].dataset.value);
                         activeMask.push(rows[si].dataset.active !== 'false');
                     }
                     if (vals.length) initSortRows(vals, activeMask);
@@ -1699,8 +1706,7 @@ app.get(['/configure', '/:config/configure'], (req, res) => {
                 var vals = [];
                 for (var i = 0; i < rows.length; i++) {
                     if (rows[i].dataset.active !== 'false') {
-                        var sel = rows[i].querySelector('.sort-select');
-                        vals.push(sel.value);
+                        vals.push(rows[i].dataset.value);
                     }
                 }
                 return vals;
@@ -1719,6 +1725,7 @@ app.get(['/configure', '/:config/configure'], (req, res) => {
                     row.className = 'sort-row';
                     row.dataset.idx = i;
                     row.dataset.active = activeMask[i] ? 'true' : 'false';
+                    row.dataset.value = used[i];
                     var numSpan = document.createElement('span');
                     numSpan.className = 'num';
                     numSpan.textContent = i + 1;
@@ -1731,16 +1738,14 @@ app.get(['/configure', '/:config/configure'], (req, res) => {
                     toggle.title = activeMask[i] ? 'Klikni pre vypnutie' : 'Klikni pre zapnutie';
                     row.appendChild(toggle);
 
-                    var sel = document.createElement('select');
-                    sel.className = 'sort-select';
-                    for (var j = 0; j < SORT_OPTIONS.length; j++) {
-                        var opt = document.createElement('option');
-                        opt.value = SORT_OPTIONS[j];
-                        opt.textContent = SORT_LABELS[SORT_OPTIONS[j]];
-                        if (SORT_OPTIONS[j] === used[i]) opt.selected = true;
-                        sel.appendChild(opt);
-                    }
-                    row.appendChild(sel);
+                    // Fixed label namiesto selectu — criterion je identita riadku
+                    var label = document.createElement('span');
+                    label.className = 'sort-label';
+                    label.textContent = SORT_LABELS[used[i]] || used[i];
+                    label.style.flex = '1';
+                    label.style.fontSize = '13px';
+                    label.style.color = '#ccc';
+                    row.appendChild(label);
 
                     var up = document.createElement('button');
                     up.className = 'sort-btn';
@@ -1771,8 +1776,7 @@ app.get(['/configure', '/:config/configure'], (req, res) => {
                 var vals = [];
                 var activeMask = [];
                 for (var si = 0; si < rows.length; si++) {
-                    var s = rows[si].querySelector('.sort-select');
-                    vals.push(s.value);
+                    vals.push(rows[si].dataset.value);
                     activeMask.push(rows[si].dataset.active !== 'false');
                 }
                 var tmp = vals[idx];
@@ -2390,7 +2394,7 @@ app.get('/:config/stream/:type/:id.json', async (req, res) => {
 
         // 2d. Source type filter (chips: webdl, bluray, hdtv, dvdrip, webrip, hdrip, ppv, remux, cam)
         const userSource = userConfig.source;
-        if (userSource && Array.isArray(userSource) && userSource.length > 0 && userSource.length < 8) {
+        if (userSource && Array.isArray(userSource) && userSource.length > 0 && userSource.length < 12) {
             streamy = streamy.filter(s => {
                 const src = (s._sortSource || 'neznámy').toLowerCase();
                 // Unknown source type always passes through
