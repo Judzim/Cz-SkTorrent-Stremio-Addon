@@ -2452,23 +2452,21 @@ app.get('/:config/stream/:type/:id.json', async (req, res) => {
         }
 
         // 6. Max per resolution limit (po sorte, pred cleanup)
+        // POZOR: Zachováva sort order — neprehadzuje kvality!
         const maxPerResVal = parseInt(userConfig.maxPerRes || '0');
         if (maxPerResVal > 0) {
-            const grouped = {};
+            const taken = {};
+            const result = [];
             for (let i = 0; i < streamy.length; i++) {
                 const s = streamy[i];
                 const q = s._sortQuality || 0;
-                if (!grouped[q]) grouped[q] = [];
-                if (grouped[q].length < maxPerResVal) {
-                    grouped[q].push(s);
+                if (!taken[q]) taken[q] = 0;
+                if (taken[q] < maxPerResVal) {
+                    taken[q]++;
+                    result.push(s);
                 }
             }
-            streamy = [];
-            const qualityOrder = [4, 3, 2, 1, 0];
-            for (let qi = 0; qi < qualityOrder.length; qi++) {
-                const items = grouped[qualityOrder[qi]];
-                if (items) streamy = streamy.concat(items);
-            }
+            streamy = result;
         }
 
         // Odstrániť interné _sort polia
