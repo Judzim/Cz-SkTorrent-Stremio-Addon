@@ -1385,31 +1385,31 @@ app.get(['/configure', '/:config/configure'], (req, res) => {
                 </div>
                 <div style="padding: 8px 20px 4px;"><label style="font-size:12px;font-weight:600;color:#aaa;" data-i18n="label.videoQuality">Kvalita videa</label></div>
                 <div class="chip-group" id="hdrChips" style="padding-bottom:12px;">
-                    <span class="chip active" data-hdr="hdr" onclick="toggleChip(this)">HDR</span>
-                    <span class="chip active" data-hdr="dv" onclick="toggleChip(this)">Dolby Vision</span>
-                    <span class="chip active" data-hdr="hevc" onclick="toggleChip(this)">HEVC</span>
-                    <span class="chip active" data-hdr="atmos" onclick="toggleChip(this)">Atmos</span>
+                    <span class="chip ${hasArrVal('hdr','hdr',true)}" data-hdr="hdr" onclick="toggleChip(this)">HDR</span>
+                    <span class="chip ${hasArrVal('hdr','dv',true)}" data-hdr="dv" onclick="toggleChip(this)">Dolby Vision</span>
+                    <span class="chip ${hasArrVal('hdr','hevc',true)}" data-hdr="hevc" onclick="toggleChip(this)">HEVC</span>
+                    <span class="chip ${hasArrVal('hdr','atmos',true)}" data-hdr="atmos" onclick="toggleChip(this)">Atmos</span>
                 </div>
 
                 <div style="padding: 8px 20px 4px;"><label style="font-size:12px;font-weight:600;color:#aaa;" data-i18n="label.filter18">18+ filter</label></div>
                 <div class="chip-group" id="adultChips" style="padding-bottom:4px;">
-                    <span class="chip active" data-adult="hide" onclick="toggleChip(this)"><span data-i18n="chip.hide18">Skryť 18+ obsah</span></span>
+                    <span class="chip ${hasArrVal('adult','hide',true)}" data-adult="hide" onclick="toggleChip(this)"><span data-i18n="chip.hide18">Skryť 18+ obsah</span></span>
                 </div>
 
                 <div style="padding: 8px 20px 4px;"><label style="font-size:12px;font-weight:600;color:#aaa;" data-i18n="label.sourceType">🎞️ Typ zdroja</label></div>
                 <div class="chip-group" id="sourceChips" style="padding-bottom:12px;">
-                    <span class="chip active" data-source="webdl" onclick="toggleChip(this)">WEB-DL</span>
-                    <span class="chip active" data-source="bluray" onclick="toggleChip(this)">BluRay</span>
-                    <span class="chip active" data-source="hdtv" onclick="toggleChip(this)">HDTV</span>
-                    <span class="chip active" data-source="dvdrip" onclick="toggleChip(this)">DVDRip</span>
-                    <span class="chip active" data-source="webrip" onclick="toggleChip(this)">WEBRip</span>
-                    <span class="chip active" data-source="hdrip" onclick="toggleChip(this)">HDRip</span>
-                    <span class="chip active" data-source="ppv" onclick="toggleChip(this)">PPV</span>
-                    <span class="chip active" data-source="remux" onclick="toggleChip(this)">Remux</span>
-                    <span class="chip active" data-source="cam" onclick="toggleChip(this)" style="border-color:#663;">CAM / KINO</span>
-                    <span class="chip active" data-source="screener" onclick="toggleChip(this)" style="border-color:#663;">Screener</span>
-                    <span class="chip active" data-source="vodrip" onclick="toggleChip(this)" style="border-color:#553;">VODRip</span>
-                    <span class="chip active" data-source="tvrip" onclick="toggleChip(this)" style="border-color:#553;">TVRip</span>
+                    <span class="chip ${hasArrVal('source','webdl',true)}" data-source="webdl" onclick="toggleChip(this)">WEB-DL</span>
+                    <span class="chip ${hasArrVal('source','bluray',true)}" data-source="bluray" onclick="toggleChip(this)">BluRay</span>
+                    <span class="chip ${hasArrVal('source','hdtv',true)}" data-source="hdtv" onclick="toggleChip(this)">HDTV</span>
+                    <span class="chip ${hasArrVal('source','dvdrip',true)}" data-source="dvdrip" onclick="toggleChip(this)">DVDRip</span>
+                    <span class="chip ${hasArrVal('source','webrip',true)}" data-source="webrip" onclick="toggleChip(this)">WEBRip</span>
+                    <span class="chip ${hasArrVal('source','hdrip',true)}" data-source="hdrip" onclick="toggleChip(this)">HDRip</span>
+                    <span class="chip ${hasArrVal('source','ppv',true)}" data-source="ppv" onclick="toggleChip(this)">PPV</span>
+                    <span class="chip ${hasArrVal('source','remux',true)}" data-source="remux" onclick="toggleChip(this)">Remux</span>
+                    <span class="chip ${hasArrVal('source','cam',true)}" data-source="cam" onclick="toggleChip(this)">CAM / KINO</span>
+                    <span class="chip ${hasArrVal('source','screener',true)}" data-source="screener" onclick="toggleChip(this)">Screener</span>
+                    <span class="chip ${hasArrVal('source','vodrip',true)}" data-source="vodrip" onclick="toggleChip(this)">VODRip</span>
+                    <span class="chip ${hasArrVal('source','tvrip',true)}" data-source="tvrip" onclick="toggleChip(this)">TVRip</span>
                 </div>
                 <div style="padding: 0 20px 8px;font-size:11px;color:#555;" data-i18n="hint.allSources">Prázdne = všetky zdroje</div>
 
@@ -2347,13 +2347,7 @@ app.get('/:config/stream/:type/:id.json', async (req, res) => {
 
         // ── FILTROVANIE (Meteor-štýl) ──
 
-        // 1. Cached Only filter
-        const cachedOnly = userConfig.cachedOnly === true;
-        if (cachedOnly) {
-            streamy = streamy.filter(s => s._sortCached === 1);
-        }
-
-        // 2. Resolution filter (chips: 2160p, 1080p, 720p, sd)
+        // 1. Cached Only filter — pre debrid režim už ošetrený vyššie; pre P2P nedáva zmysel
         const userRes = userConfig.res;
         if (userRes && Array.isArray(userRes) && userRes.length > 0 && userRes.length < 4) {
             const allowedQualities = [];
@@ -2372,7 +2366,7 @@ app.get('/:config/stream/:type/:id.json', async (req, res) => {
         if (userHdr && Array.isArray(userHdr) && userHdr.length > 0 && userHdr.length < 4) {
             streamy = streamy.filter(s => {
                 const hdr = s._sortHdr || '';
-                if (!hdr) return false;
+                if (!hdr) return true; // streamy bez HDR metadát prejdú cez filter
                 return userHdr.some(function(h) { return hdr.includes(h); });
             });
         }
