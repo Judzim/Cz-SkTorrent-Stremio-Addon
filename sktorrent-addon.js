@@ -1292,7 +1292,10 @@ app.get(['/configure', '/:config/configure'], (req, res) => {
                     <div style="display:flex;gap:8px;flex-wrap:wrap;">
                         <input type="text" id="loginUser" data-i18n-placeholder="login.uid.placeholder" placeholder="Používateľské meno" style="flex:1;min-width:120px;">
                         <input type="password" id="loginPass" data-i18n-placeholder="login.pass.placeholder" placeholder="Heslo" style="flex:1;min-width:120px;">
+                    </div>
+                    <div style="display:flex;gap:8px;margin-top:6px;flex-wrap:wrap;">
                         <button id="loginBtn" onclick="loginToSKTorrent()" style="padding:8px 16px;background:linear-gradient(135deg,#8A5A9E,#e040a0);color:white;border:none;border-radius:8px;font-size:13px;font-weight:600;cursor:pointer;white-space:nowrap;" data-i18n="button.login">Prihlásiť sa</button>
+                        <a href="https://sktorrent.eu/torrent/account.php" target="_blank" rel="noopener" style="padding:8px 16px;background:#333;color:#999;border:none;border-radius:8px;font-size:13px;font-weight:400;cursor:pointer;text-decoration:none;display:inline-flex;align-items:center;" data-i18n="button.register">Registrovať sa</a>
                     </div>
                     <div id="loginStatus" style="font-size:12px;margin-top:6px;"></div>
                 </div>
@@ -1552,6 +1555,7 @@ app.get(['/configure', '/:config/configure'], (req, res) => {
                     'login.uid.placeholder': 'Používateľské meno',
                     'login.pass.placeholder': 'Heslo',
                     'button.login': 'Prihlásiť sa',
+                    'button.register': 'Registrovať sa',
                     'button.loggingIn': 'Prihlasujem...',
                     'link.manual': '▶ Manuálne zadať UID a PASS',
                     'link.manualHide': '▼ Skryť manuálne polia',
@@ -1634,6 +1638,7 @@ app.get(['/configure', '/:config/configure'], (req, res) => {
                     'login.uid.placeholder': 'Username',
                     'login.pass.placeholder': 'Password',
                     'button.login': 'Login',
+                    'button.register': 'Register',
                     'button.loggingIn': 'Logging in...',
                     'link.manual': '▶ Enter UID and PASS manually',
                     'link.manualHide': '▼ Hide manual fields',
