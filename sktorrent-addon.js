@@ -834,8 +834,17 @@ async function stiahnutSurovyTorrent(url, userAxios) {
 
 async function vytvoritStream(t, seria, epizoda, userAxios, meta, userConfig) {
     logInfo(`Creating stream for torrent ID: ${t.id} (${t.name})`);
-    const torrentData = await stiahnutTorrentData(t.downloadUrl, userAxios);
-    if (!torrentData) return null;
+    
+    // Debrid mode (TorBox/RD): info_hash je už v t.id z URL detail page,
+    // netreba sťahovať .torrent (ktorý vyžaduje prihlásenie na SKTorrent)
+    const maDebrid = !!(userConfig?.torbox || userConfig?.realdebrid);
+    
+    let torrentData = null;
+    if (!maDebrid) {
+        // P2P režim: potrebujeme .torrent pre zoznam súborov
+        torrentData = await stiahnutTorrentData(t.downloadUrl, userAxios);
+        if (!torrentData) return null;
+    }
     
     let najdenyIndex = -1;
     let najdenyNazovSuboru = null;
@@ -847,7 +856,8 @@ async function vytvoritStream(t, seria, epizoda, userAxios, meta, userConfig) {
     }
 
     // --- VYHĽADANIE KONKRÉTNEJ EPIZÓDY ---
-    if (seria !== undefined && epizoda !== undefined) {
+    // Pri debrid režime nemáme zoznam súborov, preskočíme a necháme /play handler
+    if (torrentData && seria !== undefined && epizoda !== undefined) {
         const videoSubory = torrentData.files
             .filter(f => /\.(mp4|mkv|avi|m4v)$/i.test(f.path))
             .sort((a, b) => a.path.localeCompare(b.path, undefined, { numeric: true, sensitivity: "base" }));
@@ -908,7 +918,7 @@ if (videoSubory.length === 1) {
         logSuccess(`[TORRENT: ${t.name}] ÚSPECH! Pre S${seria}E${epizoda} vybraný súbor: ${najdenyNazovSuboru}`);
     }
 }
-     } else {
+     } else if (torrentData) {
         // --- VYHĽADANIE SÚBORU PRE FILMY ---
         // Vyfiltrujeme video súbory a zoradíme ich podľa veľkosti zostupne (najväčší bude prvý)
         const videoSubory = torrentData.files
@@ -976,9 +986,9 @@ if (videoSubory.length === 1) {
     if (analyzaNazvu.includes('hevc') || analyzaNazvu.includes('h265') || analyzaNazvu.includes('x265')) hdrFeatures.push('hevc');
     if (analyzaNazvu.includes('atmos')) hdrFeatures.push('atmos');
     const hdrTag = hdrFeatures.length > 0 ? hdrFeatures.join(',') : '';
-    const fileSize = najdenyIndex !== -1 ? 
+    const fileSize = torrentData && najdenyIndex !== -1 ? 
         (torrentData.files.find(f => f.index === najdenyIndex)?.length || 0) : 
-        torrentData.files.reduce((acc, f) => acc + (f.length || 0), 0);
+        (torrentData ? torrentData.files.reduce((acc, f) => acc + (f.length || 0), 0) : 1048576);
     const formatFileSize = formatBytes(fileSize);
     const velkostText = `💿 ${formatFileSize} (🧩 ${t.size})`;
 
@@ -1069,7 +1079,7 @@ if (videoSubory.length === 1) {
         },
         sktId: t.id,
         fileName: cistyNazovSuboru,
-        infoHash: torrentData.infoHash,
+        infoHash: torrentData ? torrentData.infoHash : t.id,
         fileIdx: najdenyIndex === -1 ? 0 : najdenyIndex,
         isDub: jeSKCZ,
         seeds: t.seeds,
@@ -2017,8 +2027,13 @@ app.get('/:config/stream/:type/:id.json', async (req, res) => {
     const activePreferDub = userConfig?.preferDub === true;
 
     if (!activeUid || !activePass) {
-        logWarn(`Stream request denied - Invalid or missing config.`);
-        return res.json({ streams: [], error: "Neplatná konfigurácia." });
+        // Debrid-only režim (TorBox/RD) nepotrebuje SKTorrent login
+        const maDebrid = !!(activeTorbox || userConfig?.realdebrid);
+        if (!maDebrid) {
+            logWarn(`Stream request denied - Invalid or missing config (no login, no debrid).`);
+            return res.json({ streams: [], error: "Neplatná konfigurácia." });
+        }
+        logInfo(`Debrid-only config: ${activeTorbox ? 'TorBox' : 'Real-Debrid'} — SKTorrent login not required`);
     }
     
     // Backward compatibility: map old config fields to new ones
@@ -2718,32 +2733,29 @@ async function handleRealDebridPlay(req, res, hash, decodedFileName, RD_API_KEY)
     }
 }
 
-// ========================================================================="
+// =========================================================================
 
 app.get("/:config/download/:hash/:sktId", async (req, res) => {
     const { hash, sktId, config } = req.params;
     
     const userConfig = decodeConfig(config);
-    if (!userConfig || !userConfig.uid || !userConfig.pass) return res.status(400).send("Chyba Configu");
+    if (!userConfig) return res.status(400).send("Chyba Configu");
 
     const debridProvider = userConfig.debridProvider || (userConfig.torbox ? 'torbox' : '');
     const debridApiKey = debridProvider === 'torbox' ? userConfig.torbox : (debridProvider === 'realdebrid' ? userConfig.realdebrid : null);
 
     if (!debridApiKey) return res.status(400).send("Chýba debrid API kľúč.");
 
-    const userAxios = getFastAxios(userConfig);
-
     try {
-        const torrentUrl = `${BASE_URL}/torrent/download.php?id=${sktId}`;
-        const torrentBuffer = await stiahnutSurovyTorrent(torrentUrl, userAxios);
-        if (!torrentBuffer) return res.status(500).send("Nepodarilo sa stiahnuť .torrent súbor.");
+        // Použijeme magnet link namiesto .torrent súboru — netreba login na SKTorrent
+        logApi(`Downloading torrent via magnet: magnet:?xt=urn:btih:${hash}`);
 
         if (debridProvider === 'torbox') {
             const formData = new FormData();
             formData.append("seed_instantly", "true");
             formData.append("allow_zip", "false");
             formData.append("seed", "2");
-            formData.append("file", torrentBuffer, { filename: `${hash}.torrent`, contentType: "application/x-bittorrent" });
+            formData.append("magnet", `magnet:?xt=urn:btih:${hash}`);
 
             const createRes = await axios.post("https://api.torbox.app/v1/api/torrents/createtorrent", formData, {
                 headers: { "Authorization": `Bearer ${debridApiKey}`, ...formData.getHeaders() },
