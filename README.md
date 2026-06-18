@@ -1,5 +1,7 @@
 # 🎬 SKTorrent Stremio Addon
 
+[![License: AGPL v3](https://img.shields.io/badge/License-AGPL%20v3-blue.svg)](https://www.gnu.org/licenses/agpl-3.0)
+
 Neoficiálny Stremio doplnok pre vyhľadávanie a streamovanie filmov a seriálov z populárneho slovenského trackera **SKTorrent.eu**. Addon funguje na princípe vlastnej konfigurácie – každý používateľ si zadáva svoje vlastné prihlasovacie údaje (cookies) z SKTorrentu.
 
 ## 🚀 Inštalácia (Verejné inštancie)
@@ -61,6 +63,14 @@ Pri zapnutom debrid providerovi (TorBox / Real-Debrid) majú streamy v Stremiu p
 | `[❌]` | **Blokovaný** (iba Real-Debrid) — Real-Debrid blokuje názvy obsahujúce určité reťazce (napr. `BDRip`, `WEB-DL`, `RARBG`, `YTS`). Tieto streamy sa nedajú prehrať cez RD a sú automaticky presunuté na koniec radenia |
 
 Cache status kontrolujeme cez **StremThru proxy** — batch request na RD API (`GET /magnets/check`). Problém: StremThru DHT nie je 100% spoľahlivý, niekedy vráti `"unknown"` (⏳) aj keď torrent na RD serveroch reálne je. Vtedy ho play handler pošle do RD, ktorý ho nájde a streamuje — na druhý krát už cache check vráti `"cached"` (⚡). Cache status je globálny, nie viazaný na konkrétny API kľúč.
+
+---
+
+## 📄 Licencia
+
+Tento projekt je licencovaný pod **GNU Affero General Public License v3.0** — pozri [LICENSE](LICENSE) pre viac informácií.
+
+Stručne: AGPL v3 zaručuje, že tento softvér zostane slobodný a otvorený aj keď beží ako sieťová služba. Ak niekto modifikuje tento addon a spustí ho na verejnom serveri, musí poskytnúť zdrojový kód svojich úprav používateľom, ktorí s ním interagujú.
 
 ---
 
