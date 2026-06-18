@@ -1389,7 +1389,7 @@ app.get(['/configure', '/:config/configure'], (req, res) => {
                 <div class="checkbox-row" onclick="toggleCheckbox('cachedOnly', event)">
                     <input type="checkbox" id="cachedOnly" ${getCheck('cachedOnly', false)}>
                     <span class="label-text" data-i18n="checkbox.cached">Cached Only</span>
-                    <span class="label-desc" data-i18n="checkbox.cached.desc">Len TorBox cachované streamy</span>
+                    <span class="label-desc" data-i18n="checkbox.cached.desc">Len cachované streamy</span>
                 </div>
                 <div style="padding: 8px 20px 4px;"><label style="font-size:12px;font-weight:600;color:#aaa;" data-i18n="label.videoQuality">Kvalita videa</label></div>
                 <div class="chip-group" id="hdrChips" style="padding-bottom:12px;">
@@ -1538,7 +1538,7 @@ app.get(['/configure', '/:config/configure'], (req, res) => {
                     'section.filters': 'Kvalita a filtre',
                     'desc.filters': 'Obmedz kvalitu, veľkosť a počet výsledkov',
                     'checkbox.cached': 'Cached Only',
-                    'checkbox.cached.desc': 'Len TorBox cachované streamy',
+                    'checkbox.cached.desc': 'Len cachované streamy',
                     'label.videoQuality': 'Kvalita videa',
                     'label.filter18': '18+ filter',
                     'chip.hide18': 'Skryť 18+ obsah',
@@ -1620,7 +1620,7 @@ app.get(['/configure', '/:config/configure'], (req, res) => {
                     'section.filters': 'Quality & Filters',
                     'desc.filters': 'Limit quality, size, and number of results',
                     'checkbox.cached': 'Cached Only',
-                    'checkbox.cached.desc': 'TorBox cached streams only',
+                    'checkbox.cached.desc': 'Cached streams only',
                     'label.videoQuality': 'Video quality',
                     'label.filter18': '18+ filter',
                     'chip.hide18': 'Hide 18+ content',
