@@ -55,23 +55,16 @@ function logApi(msg) { console.log(`[${getTime()}] 🌐 API: ${msg}`); }
 // ===================================================================
 // CACHE a CONCURRENCY SYSTÉM
 // ===================================================================
-const cache = new Map();
+const cache = new Map(); // Nechame tu len aby to nehodilo error ak sa na to nieco iné odkazuje
 
 async function withCache(key, ttlMs, fetcher) {
-    const now = Date.now();
-    const cached = cache.get(key);
-    if (cached && (now - cached.ts) < ttlMs) {
-        logCache(`HIT: ${key}`);
-        return cached.data;
-    }
-    
-    logCache(`MISS (${ttlMs}ms TTL): ${key}`);
+    logCache(`BYPASS CACHE - Ziskavam data nazivo pre: ${key}`);
     try {
+        // Zavoláme priamo funkciu na ziskanie dat, do pamate nic neukladame
         const data = await fetcher();
-        cache.set(key, { data, ts: now });
         return data;
     } catch (error) {
-        logError(`Failed to fetch key: ${key}`, error);
+        logError(`Failed to fetch key (no cache): ${key}`, error);
         return null;
     }
 }
@@ -711,25 +704,6 @@ async function ziskatVsetkyNazvyARok(imdbId, vlastnyTyp, tmdbKey, tvdbKey) {
                     await pridajTvdbNazvy(nazvy, tvdbId, tvdbKey);
                 }
             } catch (e) { logWarn(`TVDB fallback failed pre TMDB ${tmdbId}`); }
-        }
-
-        // ── IMDb autocomplete fallback (keď nemáme žiadne názvy) ──
-        if (nazvy.size === 0) {
-            logApi(`IMDb autocomplete fallback for IMDB: ${imdbId}`);
-            try {
-                const firstChar = (imdbId || 't').charAt(0);
-                const acRes = await axios.get(`https://v2.sg.media-imdb.com/suggestion/titles/${firstChar}/${imdbId}.json`, { timeout: 3000 });
-                const acData = acRes.data;
-                if (acData && acData.d && Array.isArray(acData.d)) {
-                    for (const item of acData.d) {
-                        if (item.id === imdbId && (item.l || item.q || item.s)) {
-                            const name = (item.l || item.q || item.s || '').trim();
-                            if (name) nazvy.add(name);
-                            break;
-                        }
-                    }
-                }
-            } catch (e) { logWarn(`IMDb autocomplete pre ${imdbId} zlyhalo: ${e.message}`); }
         }
 
         if (!titleOriginal) titleOriginal = titleCz; 
@@ -2062,7 +2036,7 @@ const handleManifest = (req, res) => {
 
     res.json({
         id: "org.stremio.sktorrent.addon", 
-        version: "2.1.0",
+        version: "2.0.0",
         name: "TorrentSK",
         description: "SKTorrent s TorBox prehrávaním, ČSFD a metadátami",
         logo: `${PUBLIC_URL}/logo.png`,
@@ -2070,7 +2044,7 @@ const handleManifest = (req, res) => {
         types: ["movie", "series"],
         catalogs: [],
         resources: ["stream"],
-        idPrefixes: ["tt", "tmdb"],
+        idPrefixes: ["tt"],
         behaviorHints: {
             configurable: true,
             configurationRequired: false
