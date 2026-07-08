@@ -26,7 +26,8 @@ const https = require("https");
 const express = require("express");
 const FormData = require("form-data");
 const path = require("path");
-const cors = require("cors"); 
+const cors = require("cors");
+const fs = require("fs"); 
 // const { csfd } = require('node-csfd-api'); 
 
 const PORT = process.env.PORT || 7000; 
@@ -212,9 +213,12 @@ async function overitTorboxCache(infoHashes, torboxKey) {
 }
 
 // ===================================================================
-// REAL-DEBRID FUNKCIE (cez StremThru proxy)
+// REAL-DEBRID FUNKCIE (priame RD API + lokálna cache)
 // ===================================================================
-const STREMTHRU_URL = "https://stremthru.13377001.xyz";
+const RD_API_BASE = "https://api.real-debrid.com/rest/1.0";
+const RD_CACHE_FILE = path.join(__dirname, "rd_cache.json");
+const RD_CACHE_MAX_AGE = 7 * 24 * 60 * 60 * 1000; // 7 dni
+const RD_CACHE_REFRESH_INTERVAL = 5 * 60 * 1000; // 5 minut medzi pagináciami
 
 // Zoznam patternov, ktore Real-Debrid blokuje (451 infringing_file)
 const RD_BLOCKED_PATTERNS = [
@@ -232,90 +236,179 @@ function jeRDNazovBlokovany(nazov) {
     return RD_BLOCKED_PATTERNS.some(p => lower.includes(p));
 }
 
+// ===================================================================
+// RD JSON CACHE (distribuovaná medzi userov)
+// ===================================================================
+let rdCache = {};
+let rdCacheLoaded = false;
+let rdLastRefresh = 0;
+let rdRefreshPromise = null;
+
+function nacitatRdCache() {
+    try {
+        if (fs.existsSync(RD_CACHE_FILE)) {
+            const raw = fs.readFileSync(RD_CACHE_FILE, 'utf-8');
+            rdCache = JSON.parse(raw);
+            const now = Date.now();
+            for (const hash in rdCache) {
+                if (now - rdCache[hash].cached_at > RD_CACHE_MAX_AGE) {
+                    delete rdCache[hash];
+                }
+            }
+        }
+    } catch (e) {
+        logWarn(`RD cache load failed: ${e.message}`);
+        rdCache = {};
+    }
+    rdCacheLoaded = true;
+    logInfo(`RD cache loaded: ${Object.keys(rdCache).length} hashes`);
+}
+
+function ulozitRdCache() {
+    try {
+        const dir = path.dirname(RD_CACHE_FILE);
+        if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+        fs.writeFileSync(RD_CACHE_FILE, JSON.stringify(rdCache, null, 0), 'utf-8');
+    } catch (e) {
+        logWarn(`RD cache save failed: ${e.message}`);
+    }
+}
+
+// ===================================================================
+// RD API HELPERY (priame volania)
+// ===================================================================
+const RD_AXIOS_TIMEOUT = 20000;
+
+function rdHeaders(apiKey) {
+    return { "Authorization": `Bearer ${apiKey}`, "User-Agent": "TorrentSK/1.0" };
+}
+
+async function rdAddMagnet(apiKey, hash) {
+    const magnet = `magnet:?xt=urn:btih:${hash}`;
+    const res = await axios.post(`${RD_API_BASE}/torrents/addMagnet`,
+        `magnet=${encodeURIComponent(magnet)}`,
+        { headers: { ...rdHeaders(apiKey), "Content-Type": "application/x-www-form-urlencoded" }, timeout: RD_AXIOS_TIMEOUT }
+    );
+    return res.data;
+}
+
+async function rdSelectFiles(apiKey, torrentId, fileIds) {
+    const res = await axios.post(`${RD_API_BASE}/torrents/selectFiles/${torrentId}`,
+        `files=${fileIds}`,
+        { headers: { ...rdHeaders(apiKey), "Content-Type": "application/x-www-form-urlencoded" }, timeout: RD_AXIOS_TIMEOUT }
+    );
+    return res.status === 204;
+}
+
+async function rdTorrentInfo(apiKey, torrentId) {
+    const res = await axios.get(`${RD_API_BASE}/torrents/info/${torrentId}`,
+        { headers: rdHeaders(apiKey), timeout: RD_AXIOS_TIMEOUT }
+    );
+    return res.data;
+}
+
+async function rdUnrestrictLink(apiKey, link) {
+    const res = await axios.post(`${RD_API_BASE}/unrestrict/link`,
+        `link=${encodeURIComponent(link)}`,
+        { headers: { ...rdHeaders(apiKey), "Content-Type": "application/x-www-form-urlencoded" }, timeout: RD_AXIOS_TIMEOUT }
+    );
+    return res.data;
+}
+
+async function rdDeleteTorrent(apiKey, torrentId) {
+    await axios.delete(`${RD_API_BASE}/torrents/delete/${torrentId}`,
+        { headers: rdHeaders(apiKey), timeout: 10000 }
+    );
+}
+
+async function rdListTorrents(apiKey, page = 1, limit = 100) {
+    const res = await axios.get(`${RD_API_BASE}/torrents?page=${page}&limit=${limit}`,
+        { headers: rdHeaders(apiKey), timeout: 15000 }
+    );
+    return Array.isArray(res.data) ? res.data : [];
+}
+
+// ===================================================================
+// PAGINÁCIA /torrents DO CACHE
+// ===================================================================
+async function rdPaginateTorrents(apiKey) {
+    logApi(`RD paginácia /torrents na refresh cache...`);
+    let page = 1;
+    const limit = 100;
+    let total = 0;
+
+    while (page <= 50) {
+        const items = await rdListTorrents(apiKey, page, limit);
+        if (!items.length) break;
+
+        for (const t of items) {
+            if (t.status === 'downloaded' && t.hash) {
+                const h = t.hash.toLowerCase();
+                if (!rdCache[h]) {
+                    rdCache[h] = { cached_at: Date.now() };
+                    total++;
+                }
+            }
+        }
+
+        if (items.length < limit) break;
+        page++;
+    }
+
+    rdLastRefresh = Date.now();
+    ulozitRdCache();
+    logSuccess(`RD cache refresh: pridaných ${total} nových hashov (spolu ${Object.keys(rdCache).length})`);
+}
+
+// ===================================================================
+// NOVÝ RD CACHE CHECK (lokálna cache + fallback /torrents)
+// ===================================================================
 async function overitRealDebridCache(infoHashes, rdKey) {
     if (!rdKey || !infoHashes || infoHashes.length === 0) return {};
-    
+
+    if (!rdCacheLoaded) nacitatRdCache();
+
     const platneHashe = infoHashes.filter(h => h && typeof h === 'string');
     if (platneHashe.length === 0) return {};
 
     const unikatneHashe = [...new Set(platneHashe)].map(h => h.toLowerCase());
     const cacheMap = {};
 
-    logApi(`RD cache check cez StremThru (${unikatneHashe.length} hashov)`);
+    // 1. Lokálna cache — instant
+    for (const hash of unikatneHashe) {
+        if (rdCache[hash]) {
+            cacheMap[hash] = true;
+        }
+    }
+    logCache(`RD cache: ${Object.keys(cacheMap).length}/${unikatneHashe.length} z lokálnej cache`);
 
-    // Oba requesty spustíme paralelne — shared cache aj osobný účet
-    await Promise.all([
-        // 1. Shared cache (magnets/check)
-        (async () => {
-            try {
-                const magnetParam = unikatneHashe.map(h => `magnet:?xt=urn:btih:${h}`).join(',');
-                const url = `${STREMTHRU_URL}/v0/store/magnets/check?magnet=${encodeURIComponent(magnetParam)}&client_ip=127.0.0.1&sid=stremio`;
+    // 2. Ak nejaké chýbajú, skúsime refresh /torrents (max 1x za 5 min)
+    const chybajuceHashe = unikatneHashe.filter(h => !cacheMap[h]);
+    const now = Date.now();
 
-                const response = await axios.get(url, {
-                    headers: {
-                        "X-StremThru-Store-Name": "realdebrid",
-                        "X-StremThru-Store-Authorization": `Bearer ${rdKey}`,
-                        "User-Agent": "TorrentSK/1.0"
-                    },
-                    timeout: 30000
-                });
+    if (chybajuceHashe.length > 0 && (now - rdLastRefresh > RD_CACHE_REFRESH_INTERVAL)) {
+        if (!rdRefreshPromise) {
+            rdRefreshPromise = rdPaginateTorrents(rdKey).finally(() => {
+                rdRefreshPromise = null;
+            });
+        }
 
-                const data = response.data;
-                if (!data || !data.data || !Array.isArray(data.data.items)) {
-                    logWarn(`StremThru vrátil neočakávaný formát`);
-                    return;
-                }
+        try {
+            await Promise.race([
+                rdRefreshPromise,
+                new Promise(r => setTimeout(r, 30000))
+            ]);
+        } catch (e) {
+            logWarn(`RD cache refresh zlyhal: ${e.message}`);
+        }
 
-                for (const item of data.data.items) {
-                    const hash = item.hash ? item.hash.toLowerCase() : null;
-                    if (!hash) continue;
-                    if (!unikatneHashe.includes(hash)) continue;
-
-                    if (item.status === 'cached') {
-                        logSuccess(`RD CACHED cez StremThru: ${hash.substring(0,12)}... (${item.name || '?'})`);
-                        cacheMap[hash] = true;
-                    } else {
-                        logCache(`RD NOT cached: ${hash.substring(0,12)}... (status: ${item.status})`);
-                    }
-                }
-            } catch (error) {
-                if (error.response) {
-                    logError(`StremThru API error (HTTP ${error.response.status})`, JSON.stringify(error.response.data).substring(0, 300));
-                } else {
-                    logError(`StremThru error: ${error.message || 'unknown'}`);
-                }
+        for (const hash of chybajuceHashe) {
+            if (rdCache[hash]) {
+                cacheMap[hash] = true;
+                logCache(`RD cached po refreshi: ${hash.substring(0,12)}...`);
             }
-        })(),
-
-        // 2. Osobný RD účet (GET /v0/store/torz)
-        (async () => {
-            try {
-                const listRes = await axios.get(`${STREMTHRU_URL}/v0/store/torz`, {
-                    headers: getStremThruHeaders(rdKey),
-                    timeout: 10000,
-                    params: { limit: 1000 }
-                });
-
-                const items = listRes.data?.data?.items || listRes.data?.data || [];
-                if (Array.isArray(items)) {
-                    for (const item of items) {
-                        if (!item.hash) continue;
-                        const h = item.hash.toLowerCase();
-                        // Kontrolujeme vsetky hashe — ak uz je v cacheMap z kroku 1,
-                        // prepisanie true->true je neškodné
-                        if (unikatneHashe.includes(h) && item.status === 'downloaded') {
-                            if (!cacheMap[h]) {
-                                cacheMap[h] = true;
-                                logCache(`RD torrent najdeny v osobnom ucte (downloaded): ${h.substring(0,12)}...`);
-                            }
-                        }
-                    }
-                }
-            } catch (listErr) {
-                logWarn(`RD osobný účet check failed (volitelne): ${listErr.message}`);
-            }
-        })()
-    ]);
+        }
+    }
 
     return cacheMap;
 }
@@ -2447,7 +2540,7 @@ app.get('/:config/stream/:type/:id.json', async (req, res) => {
 
                     if (criterion === 'cached') {
                         const cacheLevel = (s) => {
-                            if (s._sortRdBlocked === 1) return -1; // blocked → najnižšia priorita
+                            if (debridProvider === 'realdebrid' && s._sortRdBlocked === 1) return -1; // RD blocked → najnižšia priorita
                             return s._sortCached || 0;              // cached=1, not cached=0
                         };
                         cmp = cacheLevel(b) - cacheLevel(a);
@@ -2673,118 +2766,118 @@ if (directLink) {
 }
 }
 
-function getStremThruHeaders(apiKey) {
-    return {
-        "X-StremThru-Store-Name": "realdebrid",
-        "X-StremThru-Store-Authorization": `Bearer ${apiKey}`,
-        "User-Agent": "TorrentSK/1.0",
-        "Content-Type": "application/json"
-    };
-}
-
 async function handleRealDebridPlay(req, res, hash, decodedFileName, RD_API_KEY) {
-    logApi(`[RD PLAY] StremThru proxy pre hash: ${hash}`);
+    logApi(`[RD PLAY] priame RD API pre hash: ${hash}`);
     try {
-        // 1. Pridáme magnet cez StremThru (POST /v0/store/torz)
-        // StremThru zistí či je cachovaný a vráti files[].link (stremthru:// URL)
-        const magnetUri = `magnet:?xt=urn:btih:${hash}`;
-        const addRes = await axios.post(`${STREMTHRU_URL}/v0/store/torz`,
-            { link: magnetUri },
-            {
-                headers: getStremThruHeaders(RD_API_KEY),
-                timeout: 30000
+        // 1. Pridáme magnet (ak už existuje, error_code 33 = nájdeme ho v liste)
+        let torrentId;
+        try {
+            const magnetId = await rdAddMagnet(RD_API_KEY, hash);
+            torrentId = magnetId.id;
+            logApi(`[RD PLAY] Magnet pridaný: ${torrentId}`);
+        } catch (addErr) {
+            if (addErr.response?.data?.error_code === 33) {
+                // Torrent už existuje — nájdeme ho v userovom liste
+                logApi(`[RD PLAY] Magnet už existuje, hľadám v liste...`);
+                const listItems = await rdListTorrents(RD_API_KEY, 1, 100);
+                const existing = listItems.find(t => t.hash?.toLowerCase() === hash.toLowerCase());
+                if (!existing) {
+                    logError(`[RD PLAY] Torrent s hash ${hash.substring(0,12)}... nenašiel v liste`);
+                    return res.redirect(302, '/info-video');
+                }
+                torrentId = existing.id;
+                logApi(`[RD PLAY] Nájdený existujúci torrent: ${torrentId} (status: ${existing.status})`);
+            } else {
+                throw addErr;
             }
-        );
-
-        const torzData = addRes.data?.data;
-        if (!torzData || !torzData.files) {
-            return res.status(500).send("StremThru nevrátil platné dáta.");
         }
 
-        if (torzData.status === 'downloaded') {
-            // Nájdeme správny video súbor
+        // 2. Počkáme na magnet conversion (poll max 15x po 500ms)
+        let info;
+        for (let i = 0; i < 15; i++) {
+            info = await rdTorrentInfo(RD_API_KEY, torrentId);
+            if (info.status === 'waiting_files_selection') break;
+            if (info.status === 'downloaded' || info.status === 'downloading') break;
+            await new Promise(r => setTimeout(r, 500));
+        }
+
+        if (!info || info.status === 'magnet_error' || info.status === 'error') {
+            logError(`[RD PLAY] Magnet conversion failed: ${info?.status}`);
+            return res.redirect(302, '/info-video');
+        }
+
+        // 3. Vyberieme video súbory
+        const videoFiles = (info.files || []).filter(f => /\.(mp4|mkv|avi|m4v|mov)$/i.test(f.path || ''));
+        const fileIds = videoFiles.length > 0
+            ? videoFiles.map(f => f.id).join(',')
+            : (info.files || []).map(f => f.id).join(',');
+
+        if (fileIds) {
+            await rdSelectFiles(RD_API_KEY, torrentId, fileIds);
+        }
+
+        // 4. Skontrolujeme či je cached (progress 100 = instant)
+        info = await rdTorrentInfo(RD_API_KEY, torrentId);
+
+        if (info.progress === 100 && info.status === 'downloaded') {
+            // 5. Nájdeme správny link a unrestrict
             const fileName = decodedFileName.split('/').pop() || '';
-            let targetFile = torzData.files.find(f =>
-                (f.name || f.path || '').includes(fileName) || fileName.includes((f.name || f.path || '').split('/').pop())
-            );
-            if (!targetFile) {
-                targetFile = torzData.files.find(f => /\.(mp4|mkv|avi|m4v|mov)$/i.test(f.name || f.path || ''));
+            let targetLink = null;
+
+            if (info.links && info.links.length > 0) {
+                // Ak máme file-level linky, vyberieme správny
+                const selectedFiles = info.files.filter(f => f.selected);
+                if (selectedFiles.length === info.links.length) {
+                    const targetFileIdx = selectedFiles.findIndex(f =>
+                        (f.path || '').includes(fileName) || fileName.includes((f.path || '').split('/').pop())
+                    );
+                    targetLink = targetFileIdx >= 0 ? info.links[targetFileIdx] : info.links[0];
+                } else {
+                    targetLink = info.links[0];
+                }
             }
-            if (!targetFile) targetFile = torzData.files[0];
 
-            if (targetFile?.link) {
-                // 2. Vygenerujeme priamy CDN link cez StremThru (valid 12h)
-                const genRes = await axios.post(`${STREMTHRU_URL}/v0/store/torz/link/generate`,
-                    { link: targetFile.link },
-                    {
-                        headers: getStremThruHeaders(RD_API_KEY),
-                        timeout: 15000
-                    }
-                );
-
-                const directUrl = genRes.data?.data?.link;
-                if (directUrl) {
-                    logSuccess(`[RD PLAY] StremThru redirect OK`);
-                    return res.redirect(302, directUrl);
+            if (targetLink) {
+                const unrestricted = await rdUnrestrictLink(RD_API_KEY, targetLink);
+                if (unrestricted && unrestricted.download) {
+                    // Uložíme do cache
+                    if (!rdCacheLoaded) nacitatRdCache();
+                    rdCache[hash.toLowerCase()] = { cached_at: Date.now() };
+                    ulozitRdCache();
+                    logSuccess(`[RD PLAY] Hash ${hash.substring(0,12)} uložený do cache + redirect`);
+                    return res.redirect(302, unrestricted.download);
                 }
             }
         }
 
-        // Nie je priamo hrateľné – skúsime najprv nájsť existujúci torrent v StremThru
-        // (môže byť už stiahnutý z predchádzajúceho kliku)
-        logApi(`[RD PLAY] Status: ${torzData.status}. Skúšam nájsť existujúci torrent...`);
-        
-        try {
-            const listRes = await axios.get(`${STREMTHRU_URL}/v0/store/torz`, {
-                headers: getStremThruHeaders(RD_API_KEY),
-                timeout: 10000,
-                params: { hash, limit: 1 }
-            });
-            
-            const existingItems = listRes.data?.data?.items || listRes.data?.data || [];
-            const existingTorz = Array.isArray(existingItems) 
-                ? existingItems.find(t => t.hash?.toLowerCase() === hash.toLowerCase() && t.status === 'downloaded')
-                : null;
-            
-            if (existingTorz?.files?.[0]?.link) {
-                logSuccess(`[RD PLAY] Nájdený existujúci stiahnutý torrent`);
-                const genRes = await axios.post(`${STREMTHRU_URL}/v0/store/torz/link/generate`,
-                    { link: existingTorz.files[0].link },
-                    { headers: getStremThruHeaders(RD_API_KEY), timeout: 15000 }
-                );
-                const directUrl = genRes.data?.data?.link;
-                if (directUrl) return res.redirect(302, directUrl);
-            }
-        } catch (listErr) {
-            logWarn(`[RD PLAY] Chyba pri hľadaní existujúceho torrentu: ${listErr.message}`);
-        }
-        
-        logApi(`[RD PLAY] Status: ${torzData.status}. Redirecting na /info-video`);
-        return res.redirect(302, `/info-video`);
+        logApi(`[RD PLAY] Torrent nie je cached (${info?.status}), redirect na info-video`);
+        return res.redirect(302, '/info-video');
 
     } catch (err) {
         const status = err.response?.status;
-        const errCode = err.response?.data?.code === 'UNAVAILABLE_FOR_LEGAL_REASONS';
-        
-        if (status === 451 || status === 503 || errCode) {
+        const rdErrCode = err.response?.data?.error_code;
+        const isBlocked = status === 451 || status === 503 || err.response?.data?.code === 'UNAVAILABLE_FOR_LEGAL_REASONS' || rdErrCode === 35;
+
+        if (isBlocked) {
             const dekNazov = decodeURIComponent(decodedFileName || '').split('/').pop() || 'neznámy';
-            logError(`[RD PLAY] StremThru blokuje súbor: ${dekNazov}`);
-            return res.status(500).send(`Real-Debrid blokuje tento súbor (infringing_file). Skús iný zdroj.`);
+            logError(`[RD PLAY] RD blokuje súbor: ${dekNazov}`);
+            return res.status(500).send('Real-Debrid blokuje tento súbor (infringing_file). Skús iný zdroj.');
         }
-        
-        logError(`[RD PLAY] StremThru chyba`, err);
+
+        logError(`[RD PLAY] RD API chyba`, err);
         if (err.response) {
-            logError(`[RD PLAY] HTTP ${status} - ${JSON.stringify(err.response.data).substring(0,200)}`);
+            logError(`[RD PLAY] HTTP ${status} - ${JSON.stringify(err.response.data).substring(0, 200)}`);
         }
         return res.status(500).send(`Chyba Real-Debrid: ${err.message}`);
     }
 }
 
-// =========================================================================
+
+
 
 app.get("/:config/download/:hash/:sktId", async (req, res) => {
     const { hash, sktId, config } = req.params;
-    
+
     const userConfig = decodeConfig(config);
     if (!userConfig) return res.status(400).send("Chyba Configu");
 
@@ -2794,10 +2887,10 @@ app.get("/:config/download/:hash/:sktId", async (req, res) => {
     if (!debridApiKey) return res.status(400).send("Chýba debrid API kľúč.");
 
     try {
-        // Použijeme magnet link namiesto .torrent súboru — netreba login na SKTorrent
         logApi(`Downloading torrent via magnet: magnet:?xt=urn:btih:${hash}`);
 
         if (debridProvider === 'torbox') {
+            // ========== TORBOX DOWNLOAD (nezmenené) ==========
             const formData = new FormData();
             formData.append("seed_instantly", "true");
             formData.append("allow_zip", "false");
@@ -2809,8 +2902,6 @@ app.get("/:config/download/:hash/:sktId", async (req, res) => {
                 timeout: 15000
             });
 
-            // Skúsime získať torrentId a rovno requestdl
-            // (torrent už môže byť v shared cache, alebo DUPLICATE_ITEM vracia existujúci ID)
             const tbData = createRes.data?.data;
             let torrentId = tbData?.torrent_id ?? tbData?.id ?? tbData?.queued_id ?? null;
             const bolQueued = !!tbData?.queued_id;
@@ -2827,13 +2918,12 @@ app.get("/:config/download/:hash/:sktId", async (req, res) => {
                         logSuccess(`[TB DOWNLOAD] Torrent je rovno hrateľný, redirectujem na stream`);
                         return res.redirect(302, streamUrl);
                     }
-                    logApi(`[TB DOWNLOAD] Torrent nahratý, čaká na stiahnutie (requestdl zatiaľ nič nevráti)`);
+                    logApi(`[TB DOWNLOAD] Torrent nahratý, čaká na stiahnutie`);
                 } catch (dlErr) {
-                    logApi(`[TB DOWNLOAD] requestdl zlyhal, torrent sa ešte sťahuje: ${dlErr.message}`);
+                    logApi(`[TB DOWNLOAD] requestdl zlyhal: ${dlErr.message}`);
                 }
             }
 
-            // Ak bol torrent zaradený do queue (sloty plné), uvoľníme najstarší hotový seeding slot
             if (bolQueued || (!torrentId && createRes.data?.error === 'DUPLICATE_ITEM')) {
                 try {
                     const mylistRes = await axios.get("https://api.torbox.app/v1/api/torrents/mylist", {
@@ -2855,27 +2945,22 @@ app.get("/:config/download/:hash/:sktId", async (req, res) => {
                             );
                             logApi(`[TB SLOTS] Zastavený seeding torrentu ${toStop.id}`);
 
-                            // Explicitne spustíme queued torrent — POZOR: čerstvo queued torrent nie je v myliste,
-                            // preto treba použiť /queued/controlqueued (nie /torrents/controltorrent)
                             const queuedId = torrentId || tbData?.queued_id;
                             if (queuedId) {
-                                // Po stop_seeding počkáme 2s, aby TorBox stihol uvoľniť slot
                                 await new Promise(r => setTimeout(r, 2000));
-                                
+
                                 if (bolQueued) {
-                                    // Čerstvo queued torrent — špeciálny endpoint
                                     await axios.post("https://api.torbox.app/v1/api/queued/controlqueued",
                                         { queued_id: Number(queuedId), operation: "start" },
                                         { headers: { Authorization: `Bearer ${debridApiKey}`, "Content-Type": "application/json" }, timeout: 10000 }
                                     );
-                                    logApi(`[TB SLOTS] Spustený queued torrent ${queuedId} cez /queued/controlqueued`);
+                                    logApi(`[TB SLOTS] Spustený queued torrent ${queuedId}`);
                                 } else {
-                                    // Torrent už je v myliste — stačí resume
                                     await axios.post("https://api.torbox.app/v1/api/torrents/controltorrent",
                                         { torrent_id: String(queuedId), operation: "resume" },
                                         { headers: { Authorization: `Bearer ${debridApiKey}` }, timeout: 10000 }
                                     );
-                                    logApi(`[TB SLOTS] Spustený queued torrent ${queuedId} cez controltorrent resume`);
+                                    logApi(`[TB SLOTS] Resume queued torrent ${queuedId}`);
                                 }
                             }
                         } else {
@@ -2887,51 +2972,79 @@ app.get("/:config/download/:hash/:sktId", async (req, res) => {
                 }
             }
         } else if (debridProvider === 'realdebrid') {
-            // Pridáme magnet cez StremThru (POST /v0/store/torz)
-            const magnetUri = `magnet:?xt=urn:btih:${hash}`;
-            try {
-                const addRes = await axios.post(`${STREMTHRU_URL}/v0/store/torz`,
-                    { link: magnetUri },
-                    {
-                        headers: getStremThruHeaders(debridApiKey),
-                        timeout: 30000
-                    }
-                );
+            // ========== REAL-DEBRID DOWNLOAD (priame RD API) ==========
+            logApi(`[RD DOWNLOAD] priame RD API pre hash: ${hash}`);
 
-                const torzData = addRes.data?.data;
-                if (torzData && torzData.id) {
-                    logApi(`[RD DOWNLOAD] StremThru pridalo torrent: ${torzData.id} (status: ${torzData.status})`);
-                    
-                    // Ak je rovno stiahnutý, vygenerujeme CDN link a streamujeme
-                    if (torzData.status === 'downloaded' && torzData.files?.[0]?.link) {
-                        const genRes = await axios.post(`${STREMTHRU_URL}/v0/store/torz/link/generate`,
-                            { link: torzData.files[0].link },
-                            { headers: getStremThruHeaders(debridApiKey), timeout: 15000 }
-                        );
-                        const directUrl = genRes.data?.data?.link;
-                        if (directUrl) {
-                            logSuccess(`[RD DOWNLOAD] Torrent je rovno hrateľný, redirectujem na stream`);
-                            return res.redirect(302, directUrl);
-                        }
-                    }
-                } else {
-                    logWarn(`[RD DOWNLOAD] StremThru nevrátilo ID: ${JSON.stringify(addRes.data).substring(0,100)}`);
-                }
+            let torrentId;
+            try {
+                const magnetId = await rdAddMagnet(debridApiKey, hash);
+                torrentId = magnetId.id;
+                logApi(`[RD DOWNLOAD] Magnet pridaný: ${torrentId}`);
             } catch (addErr) {
-                if (addErr.response?.status === 451 || addErr.response?.data?.code === 'UNAVAILABLE_FOR_LEGAL_REASONS') {
-                    logWarn(`[RD DOWNLOAD] StremThru blokuje súbor (infringing_file)`);
+                if (addErr.response?.data?.error_code === 33) {
+                    logApi(`[RD DOWNLOAD] Magnet už existuje, hľadám v liste...`);
+                    const listItems = await rdListTorrents(debridApiKey, 1, 100);
+                    const existing = listItems.find(t => t.hash?.toLowerCase() === hash.toLowerCase());
+                    if (!existing) {
+                        logError(`[RD DOWNLOAD] Torrent s hash ${hash.substring(0,12)}... nenašiel v liste`);
+                        return res.redirect(302, '/info-video');
+                    }
+                    torrentId = existing.id;
+                    logApi(`[RD DOWNLOAD] Nájdený existujúci torrent: ${torrentId} (status: ${existing.status})`);
                 } else {
-                    logWarn(`[RD DOWNLOAD] StremThru error: ${addErr.message}`);
+                    throw addErr;
                 }
             }
+
+            // Počkáme na magnet conversion
+            let info;
+            for (let i = 0; i < 15; i++) {
+                info = await rdTorrentInfo(debridApiKey, torrentId);
+                if (info.status === 'waiting_files_selection') break;
+                if (info.status === 'downloaded' || info.status === 'downloading') break;
+                await new Promise(r => setTimeout(r, 500));
+            }
+
+            if (!info || info.status === 'magnet_error' || info.status === 'error') {
+                logError(`[RD DOWNLOAD] Magnet conversion failed: ${info?.status}`);
+                return res.redirect(302, '/info-video');
+            }
+
+            // Vyberieme video súbory
+            const videoFiles = (info.files || []).filter(f => /\.(mp4|mkv|avi|m4v|mov)$/i.test(f.path || ''));
+            const fileIds = videoFiles.length > 0
+                ? videoFiles.map(f => f.id).join(',')
+                : (info.files || []).map(f => f.id).join(',');
+
+            if (fileIds) {
+                await rdSelectFiles(debridApiKey, torrentId, fileIds);
+            }
+
+            info = await rdTorrentInfo(debridApiKey, torrentId);
+
+            if (info.progress === 100 && info.status === 'downloaded' && info.links?.length > 0) {
+                const targetLink = info.links[0];
+                const unrestricted = await rdUnrestrictLink(debridApiKey, targetLink);
+                if (unrestricted && unrestricted.download) {
+                    // Uložíme do cache
+                    if (!rdCacheLoaded) nacitatRdCache();
+                    rdCache[hash.toLowerCase()] = { cached_at: Date.now() };
+                    ulozitRdCache();
+                    logSuccess(`[RD DOWNLOAD] Hash ${hash.substring(0,12)} uložený do cache + redirect`);
+                    return res.redirect(302, unrestricted.download);
+                }
+            }
+
+            logApi(`[RD DOWNLOAD] Torrent nie je cached (${info?.status}), info-video`);
         }
 
-        res.redirect(302, `/info-video`);
+        res.redirect(302, '/info-video');
     } catch (err) {
         logError("Debrid API download/upload error", err);
         res.status(500).send("Chyba API sťahovania debrid služby.");
     }
 });
+
 
 app.get("/logo.jpg", (req, res) => {
     res.sendFile(path.join(__dirname, "logo.jpg"));
