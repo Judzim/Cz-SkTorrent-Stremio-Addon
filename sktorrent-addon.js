@@ -2344,7 +2344,7 @@ app.get('/:config/stream/:type/:id.json', async (req, res) => {
                 const hl = odstranDiakritiku(nazov.toLowerCase()).trim();
                 if (!hl) continue;
                 const escaped = hl.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-                if (new RegExp(`^${escaped}\\b`, "i").test(rawName)) return true;
+                if (new RegExp(`\\b${escaped}\\b`, "i").test(rawName)) return true;
             }
             return false;
         });
