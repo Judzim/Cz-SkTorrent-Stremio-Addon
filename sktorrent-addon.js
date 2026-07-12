@@ -2308,7 +2308,7 @@ app.get('/:config/stream/:type/:id.json', async (req, res) => {
     const zvysne = dotazyArr.slice(2);
 
     const vysledkyBatch = await Promise.all(prvyBatch.map(d =>
-        hladatTorrenty(d, userAxios, d.includes("csfd.cz") ? 8 : 2)
+        hladatTorrenty(d, userAxios, d.includes("csfd.cz") ? 2 : 2)
     ));
 
     for (let i = 0; i < prvyBatch.length; i++) {
