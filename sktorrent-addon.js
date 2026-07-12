@@ -2256,12 +2256,13 @@ app.get('/:config/stream/:type/:id.json', async (req, res) => {
 
     const dotazy = new Set();
 
-    // 2. ČSFD LINK — len pre metadata a flag (nepridavame do searchu, je 3× pomalší)
+    // 2. ČSFD LINK — hľadáme podľa presného ČSFD URL (nájde aj tituly s odlišným SK/CZ názvom)
         const hlavnyNazov = metaData?.meta?.titleOriginal || unikatneNazvy[0];
         const csfdLink = await ziskatCsfdUrl(imdbId, hlavnyNazov, vydanyRok, vlastnyTyp);
     
-    // CSFD URL nepridávame do dotazy — search na SKTorrente s URL je zbytočne pomalý
-    // (3s vs 1s pre text query). Stačí nám flag na preskočenie name filtru.
+    if (csfdLink) {
+        dotazy.add(csfdLink); 
+    }
     
     // 3. Fallback na klasické textové hľadanie
     unikatneNazvy.forEach(zaklad => {
