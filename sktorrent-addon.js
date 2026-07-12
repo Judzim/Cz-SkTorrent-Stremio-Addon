@@ -56,16 +56,21 @@ function logApi(msg) { console.log(`[${getTime()}] 🌐 API: ${msg}`); }
 // ===================================================================
 // CACHE a CONCURRENCY SYSTÉM
 // ===================================================================
-const cache = new Map(); // Nechame tu len aby to nehodilo error ak sa na to nieco iné odkazuje
+const cache = new Map();
 
 async function withCache(key, ttlMs, fetcher) {
-    logCache(`BYPASS CACHE - Ziskavam data nazivo pre: ${key}`);
+    const existujuci = cache.get(key);
+    if (existujuci && Date.now() < existujuci.expires) {
+        logCache(`HIT: ${key}`);
+        return existujuci.data;
+    }
+    logCache(`MISS: ${key}`);
     try {
-        // Zavoláme priamo funkciu na ziskanie dat, do pamate nic neukladame
         const data = await fetcher();
+        cache.set(key, { data, expires: Date.now() + ttlMs });
         return data;
     } catch (error) {
-        logError(`Failed to fetch key (no cache): ${key}`, error);
+        logError(`Failed to fetch key: ${key}`, error);
         return null;
     }
 }
@@ -2297,10 +2302,20 @@ app.get('/:config/stream/:type/:id.json', async (req, res) => {
     const videnieTorrentIds = new Set();
     let uspesneNajdeneCezCsfd = false;
 
-    for (const d of dotazy) { 
-        logInfo(`Search attempt ${pokus}: "${d}"`);
-        const najdene = await hladatTorrenty(d, userAxios);
-        
+    // Spustíme prvé 2 queries paralelne (namiesto sekvenčne)
+    const dotazyArr = [...dotazy];
+    const prvyBatch = dotazyArr.slice(0, 2);
+    const zvysne = dotazyArr.slice(2);
+
+    const vysledkyBatch = await Promise.all(prvyBatch.map(d =>
+        hladatTorrenty(d, userAxios, d.includes("csfd.cz") ? 8 : 2)
+    ));
+
+    for (let i = 0; i < prvyBatch.length; i++) {
+        const d = prvyBatch[i];
+        const najdene = vysledkyBatch[i] || [];
+        logInfo(`Search batch result: "${d?.slice(0, 60)}" → ${najdene.length} torrentov`);
+
         let pocetNovych = 0;
         for (const t of najdene) {
             if (!videnieTorrentIds.has(t.id)) {
@@ -2309,20 +2324,42 @@ app.get('/:config/stream/:type/:id.json', async (req, res) => {
                 pocetNovych++;
             }
         }
-        
+
         if (d === csfdLink && torrenty.length > 0) {
             logSuccess(`Nájdené cez ČSFD Link. Mám ${torrenty.length} výsledkov.`);
             uspesneNajdeneCezCsfd = true;
         }
-        
-        // Upravené: Ukončíme textové dotazy iba vtedy, ak sme nazbierali naozaj veľa (napr 30+)
-        // alebo ak sme použili presný ČSFD link (ten vráti vďaka paginácii kľudne 60 torrentov naraz)
+        pokus++;
+    }
+
+    // Ak po prvom batche nemáme dosť, pokračujeme sekvenčne zo zvyšnými
+    for (const d of zvysne) {
         if (uspesneNajdeneCezCsfd || torrenty.length >= 30) {
-            logInfo("Dostatok torrentov nájdených alebo použitý presný link, preskakujem ďalšie dotazy.");
-            break; 
+            logInfo("Dostatok torrentov nájdených, preskakujem ďalšie dotazy.");
+            break;
+        }
+        if (pokus > 10) break;
+        logInfo(`Search attempt ${pokus}: "${d?.slice(0, 60)}"`);
+        const najdene = await hladatTorrenty(d, userAxios, 2);
+
+        let pocetNovych = 0;
+        for (const t of najdene) {
+            if (!videnieTorrentIds.has(t.id)) {
+                torrenty.push(t);
+                videnieTorrentIds.add(t.id);
+                pocetNovych++;
+            }
         }
 
-        if (pokus > 10) break; 
+        if (d === csfdLink && torrenty.length > 0) {
+            logSuccess(`Nájdené cez ČSFD Link. Mám ${torrenty.length} výsledkov.`);
+            uspesneNajdeneCezCsfd = true;
+        }
+
+        if (torrenty.length >= 30) {
+            logInfo("Dostatok torrentov nájdených.");
+            break;
+        }
         pokus++;
     }
 
