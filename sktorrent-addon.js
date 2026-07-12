@@ -2256,15 +2256,13 @@ app.get('/:config/stream/:type/:id.json', async (req, res) => {
 
     const dotazy = new Set();
 
-    // 2. ČSFD LINK
-    // Snažíme sa použiť primárne český názov z metadát pre ČSFD vyhľadávanie
+    // 2. ČSFD LINK — len pre metadata a flag (nepridavame do searchu, je 3× pomalší)
         const hlavnyNazov = metaData?.meta?.titleOriginal || unikatneNazvy[0];
         const csfdLink = await ziskatCsfdUrl(imdbId, hlavnyNazov, vydanyRok, vlastnyTyp);
     
-    if (csfdLink) {
-        dotazy.add(csfdLink); 
-    }
-
+    // CSFD URL nepridávame do dotazy — search na SKTorrente s URL je zbytočne pomalý
+    // (3s vs 1s pre text query). Stačí nám flag na preskočenie name filtru.
+    
     // 3. Fallback na klasické textové hľadanie
     unikatneNazvy.forEach(zaklad => {
         const bezDia = odstranDiakritiku(zaklad);
@@ -2361,6 +2359,12 @@ app.get('/:config/stream/:type/:id.json', async (req, res) => {
             break;
         }
         pokus++;
+    }
+
+    // Ak CSFD našlo URL, preskočíme name filter (aj bez searchu cez URL)
+    if (csfdLink && torrenty.length > 0 && !uspesneNajdeneCezCsfd) {
+        uspesneNajdeneCezCsfd = true;
+        logSuccess(`CSFD URL známa, preskakujem name filter.`);
     }
 
     if (!uspesneNajdeneCezCsfd) {
