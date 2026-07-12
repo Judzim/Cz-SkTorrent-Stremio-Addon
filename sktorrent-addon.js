@@ -2358,6 +2358,11 @@ app.get('/:config/stream/:type/:id.json', async (req, res) => {
             logInfo("Dostatok torrentov nájdených.");
             break;
         }
+        // Ak query neprinieslo ziadne nove torrenty, dalsie uz neprinesu
+        if (pocetNovych === 0 && torrenty.length > 0) {
+            logInfo("Query nepriniesol nove torrenty, koncim.");
+            break;
+        }
         pokus++;
     }
 
