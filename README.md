@@ -8,7 +8,7 @@ Neoficiálny Stremio doplnok pre vyhľadávanie a streamovanie filmov a seriálo
 
 Addon si môžeš nainštalovať a nakonfigurovať na tejto verejne bežiacej inštancii:
 
-🔗 **[Beamup Inštancia](https://52e4d3c860ff-sktorrent-addon.baby-beamup.club/configure)**
+🔗 **[torrentsk.judzim.my.id](https://torrentsk.judzim.my.id/configure)**
 
 ---
 
