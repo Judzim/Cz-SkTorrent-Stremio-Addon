@@ -2173,8 +2173,8 @@ app.get('/:config/stream/:type/:id.json', async (req, res) => {
     logInfo(`Stream request started | Type: ${aplikaciaTyp} | ID: ${id}`);
     
     const userConfig = decodeConfig(config);
-    const activeUid = userConfig?.user_id || userConfig?.uid || process.env.SKT_UID;
-    const activePass = userConfig?.password || userConfig?.pass || process.env.SKT_PASS;
+    const activeUid = userConfig?.user_id || userConfig?.uid;
+    const activePass = userConfig?.password || userConfig?.pass;
     const activeTorbox = userConfig?.tb_key || userConfig?.torbox;
     const activeTmdb = userConfig?.tm_key || userConfig?.tmdb;
     const activePreferDub = userConfig?.preferDub === true;
