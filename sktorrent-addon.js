@@ -1413,7 +1413,7 @@ app.get(['/configure', '/:config/configure'], (req, res) => {
                 <!-- SKTorrent login — vždy viditeľný (zrýchli vyhľadávanie aj v debrid móde) -->
                 <div id="sktorrentSection" style="display:block;padding-left:16px;border-left:2px solid #333;margin:0 20px 8px;">
                 <div class="field" id="loginFields" style="display:block;">
-                    <label>🔑 <span data-i18n="label.sktorrentLogin">Prihlásiť sa na SKTorrent</span></label>
+                    <label>🔑 <span data-i18n="label.sktorrentLogin">Prihlásiť sa na SKTorrent</span> <span style="color:#666;font-weight:400;" data-i18n-optional="label.sktorrentLogin.optional">(voliteľné)</span></label>
                     <div style="display:flex;gap:8px;flex-wrap:wrap;">
                         <input type="text" id="loginUser" data-i18n-placeholder="login.uid.placeholder" placeholder="Používateľské meno" style="flex:1;min-width:120px;">
                         <input type="password" id="loginPass" data-i18n-placeholder="login.pass.placeholder" placeholder="Heslo" style="flex:1;min-width:120px;">
