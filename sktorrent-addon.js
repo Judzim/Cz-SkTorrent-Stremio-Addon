@@ -1432,18 +1432,15 @@ app.get(['/configure', '/:config/configure'], (req, res) => {
                     <input type="hidden" id="pass" value="">
                 </div>
                 
-                <!-- Manual fallback - ak niekto chce rucne zadat uid/pass -->
-                <div style="padding:0 0 8px;">
-                    <a href="#" onclick="toggleManualFields(event)" style="font-size:12px;color:#666;text-decoration:none;" data-i18n="link.manual">▶ Manuálne zadať UID a PASS</a>
-                </div>
-                <div id="manualFields" style="display:none;">
+                <!-- SKTorrent login - voliteľný ale zrýchli vyhľadávanie -->
+                <div id="manualFields">
                     <div class="field">
-                        <label data-i18n="label.uid">SKTorrent UID</label>
+                        <label data-i18n="label.uid">SKTorrent UID <span style="color:#666;font-weight:400;">(voliteľné, ale zrýchli vyhľadávanie)</span></label>
                         <input type="text" id="manualUid" data-i18n-placeholder="uid.placeholder" placeholder="Napr. 123987" value="${getVal('uid')}">
                         <div style="font-size:11px;color:#666;margin-top:2px;" data-i18n="uid.help">ℹ️ Nájdeš v cookies po prihlásení na sktorrent.eu</div>
                     </div>
                     <div class="field">
-                        <label data-i18n="label.pass">SKTorrent pass</label>
+                        <label data-i18n="label.pass">SKTorrent pass <span style="color:#666;font-weight:400;">(voliteľné)</span></label>
                         <input type="password" id="manualPass" data-i18n-placeholder="pass.placeholder" placeholder="Tvoj pass" value="${getVal('pass')}">
                         <div style="font-size:11px;color:#666;margin-top:2px;" data-i18n="pass.help">ℹ️ Nájdeš v cookies po prihlásení na sktorrent.eu</div>
                     </div>
@@ -1670,7 +1667,7 @@ app.get(['/configure', '/:config/configure'], (req, res) => {
                     'result.title': 'Tvoj inštalačný odkaz',
                     'button.copy': '📋 Kopírovať',
                     'button.install': '🚀 Inštalovať',
-                    'alert.fillUidPass': 'Pre P2P režim vyplň SKTorrent UID a PASS, alebo vyber TorBox/Real-Debrid.',
+                    'alert.fillUidPass': 'Ak používaš TorBox alebo Real-Debrid, SKTorrent UID a PASS sú voliteľné, ale zrýchlia vyhľadávanie. Pre P2P režim sú povinné.',
                     'alert.codeError': 'Chyba pri generovaní kódu.',
                     'button.copied': 'Skopírované!',
                     'button.copyIdle': 'Kopírovať',
@@ -1753,7 +1750,7 @@ app.get(['/configure', '/:config/configure'], (req, res) => {
                     'result.title': 'Your install link',
                     'button.copy': '📋 Copy',
                     'button.install': '🚀 Install',
-                    'alert.fillUidPass': 'For P2P mode fill SKTorrent UID and PASS, or choose TorBox/Real-Debrid.',
+                    'alert.fillUidPass': 'With TorBox or Real-Debrid, SKTorrent UID and PASS are optional but speed up search. For P2P mode they are required.',
                     'alert.codeError': 'Error generating code.',
                     'button.copied': 'Copied!',
                     'button.copyIdle': 'Copy',
