@@ -2034,8 +2034,8 @@ app.get(['/configure', '/:config/configure'], (req, res) => {
                 if (torboxField) torboxField.style.display = (provider === 'torbox') ? '' : 'none';
                 if (realdebridField) realdebridField.style.display = (provider === 'realdebrid') ? '' : 'none';
                 
-                // SKTorrent login: len pre P2P mód
-                if (sktorrentSection) sktorrentSection.style.display = (provider === 'p2p') ? 'block' : 'none';
+                // SKTorrent login: vždy viditeľný (zrýchli vyhľadávanie v každom móde)
+                if (sktorrentSection) sktorrentSection.style.display = 'block';
             }
 
             function toggleManualFields(e) {
