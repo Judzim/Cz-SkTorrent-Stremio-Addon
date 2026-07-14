@@ -43,15 +43,14 @@ const agentOptions = { keepAlive: true, maxSockets: 50 };
 // LOGOVACÍ SYSTÉM
 // ===================================================================
 function getTime() {
-    return new Date().toISOString().replace('T', ' ').substring(0, 19);
+    return new Date().toLocaleString('sk-SK', { timeZone: 'Europe/Bratislava', hour12: false });
 }
-
-function logInfo(msg) { console.log(`[${getTime()}] ℹ️ INFO: ${msg}`); }
-function logSuccess(msg) { console.log(`[${getTime()}] ✅ SUCCESS: ${msg}`); }
-function logWarn(msg) { console.warn(`[${getTime()}] ⚠️ WARN: ${msg}`); }
-function logError(msg, err = "") { console.error(`[${getTime()}] ❌ ERROR: ${msg}`, err ? err.message || err : ""); }
-function logCache(msg) { console.log(`[${getTime()}] 📦 CACHE: ${msg}`); }
-function logApi(msg) { console.log(`[${getTime()}] 🌐 API: ${msg}`); }
+function logInfo(msg) { /* log removed for privacy */ }
+function logSuccess(msg) { /* log removed for privacy */ }
+function logWarn(msg) { /* log removed for privacy */ }
+function logError(msg, err = "") { /* log removed for privacy */ }
+function logCache(msg) { /* log removed for privacy */ }
+function logApi(msg) { /* log removed for privacy */ }
 
 // ===================================================================
 // CACHE a CONCURRENCY SYSTÉM
