@@ -2352,63 +2352,40 @@ app.get('/:config/stream/:type/:id.json', asyncRoute(async (req, res) => {
         dotazy.add(csfdLink); 
     }
     
-    // 3. Fallback na klasické textové hľadanie
+    // 3. Textové hľadanie — SKTorrent search je čistý substring search na názve
+    // (overené testom: "Na noze" → 24 výsledkov, "Na noze S03E04" → 0, diakritika
+    // ignorovaná). Epizódové/sériové tagy sú VŽDY podmnožina základného názvu,
+    // takže ich nemá zmysel hľadať zvlášť — správnu epizódu vyberie client-side filter.
+    // Menej query = rýchlejšie aj šetrnejšie k trackeru.
     unikatneNazvy.forEach(zaklad => {
         const bezDia = odstranDiakritiku(zaklad);
-        const kratky = skratNazov(bezDia, 3); 
-
-        if (vlastnyTyp === "series" && seria !== undefined && epizoda !== undefined) {
-            const epTag  = ` S${String(seria).padStart(2, "0")}E${String(epizoda).padStart(2, "0")}`; 
-            const epTag2 = ` ${seria}x${String(epizoda).padStart(2, "0")}`; 
-            const sTag1  = ` S${String(seria).padStart(2, "0")}`; 
-            const sTag2  = ` ${seria}.série`; 
-            const sTag3  = ` ${seria}. série`; 
-
-            dotazy.add(bezDia + epTag);
-            dotazy.add(zaklad + epTag);
-            dotazy.add(bezDia + sTag3); 
-            dotazy.add(kratky + sTag3); 
-            dotazy.add(bezDia + sTag2); 
-            dotazy.add(kratky + sTag2); 
-            dotazy.add(bezDia + sTag1); 
-            dotazy.add(kratky + sTag1); 
-            dotazy.add(bezDia + epTag2);
-            dotazy.add(kratky + epTag2);
-            dotazy.add(bezDia);
-            dotazy.add(kratky);
-        } else {
-            [zaklad, bezDia, kratky].forEach(b => {
-                if (!b.trim()) return;
-                dotazy.add(b);
-            });
-        }
+        const kratky = skratNazov(bezDia, 3);
+        if (bezDia.trim()) dotazy.add(bezDia);
+        if (kratky.trim() && kratky !== bezDia) dotazy.add(kratky);
     });
 
     let torrenty = [];
-    let pokus = 1;
     const videnieTorrentIds = new Set();
     let uspesneNajdeneCezCsfd = false;
 
-    // Spustíme prvé 2 queries paralelne (namiesto sekvenčne)
+    // VŠETKY query spustíme paralelne — query set je teraz malý (CSFD URL + 1-2 názvy),
+    // takže nie je dôvod ich deliť na batch a sekvenčnú časť. SKTorrent zvláda
+    // paralelné requesty (max ~3-4), a celkovo ho zaťažíme MENEJ ako predtým
+    // (3-4 query namiesto 12).
     const dotazyArr = [...dotazy];
-    const prvyBatch = dotazyArr.slice(0, 2);
-    const zvysne = dotazyArr.slice(2);
-
-    const vysledkyBatch = await Promise.all(prvyBatch.map(d =>
+    const vysledkyBatch = await Promise.all(dotazyArr.map(d =>
         hladatTorrenty(d, userAxios, 2, userKey)
     ));
 
-    for (let i = 0; i < prvyBatch.length; i++) {
-        const d = prvyBatch[i];
+    for (let i = 0; i < dotazyArr.length; i++) {
+        const d = dotazyArr[i];
         const najdene = vysledkyBatch[i] || [];
-        logInfo(`Search batch result: "${d?.slice(0, 60)}" → ${najdene.length} torrentov`);
+        logInfo(`Search result: "${d?.slice(0, 60)}" → ${najdene.length} torrentov`);
 
-        let pocetNovych = 0;
         for (const t of najdene) {
             if (!videnieTorrentIds.has(t.id)) {
                 torrenty.push(t);
                 videnieTorrentIds.add(t.id);
-                pocetNovych++;
             }
         }
 
@@ -2416,43 +2393,6 @@ app.get('/:config/stream/:type/:id.json', asyncRoute(async (req, res) => {
             logSuccess(`Nájdené cez ČSFD Link. Mám ${torrenty.length} výsledkov.`);
             uspesneNajdeneCezCsfd = true;
         }
-        pokus++;
-    }
-
-    // Ak po prvom batche nemáme dosť, pokračujeme sekvenčne zo zvyšnými
-    for (const d of zvysne) {
-        if (uspesneNajdeneCezCsfd || torrenty.length >= 30) {
-            logInfo("Dostatok torrentov nájdených, preskakujem ďalšie dotazy.");
-            break;
-        }
-        if (pokus > 10) break;
-        logInfo(`Search attempt ${pokus}: "${d?.slice(0, 60)}"`);
-        const najdene = await hladatTorrenty(d, userAxios, 2, userKey);
-
-        let pocetNovych = 0;
-        for (const t of najdene) {
-            if (!videnieTorrentIds.has(t.id)) {
-                torrenty.push(t);
-                videnieTorrentIds.add(t.id);
-                pocetNovych++;
-            }
-        }
-
-        if (d === csfdLink && torrenty.length > 0) {
-            logSuccess(`Nájdené cez ČSFD Link. Mám ${torrenty.length} výsledkov.`);
-            uspesneNajdeneCezCsfd = true;
-        }
-
-        if (torrenty.length >= 30) {
-            logInfo("Dostatok torrentov nájdených.");
-            break;
-        }
-        // Ak query neprinieslo ziadne nove torrenty, dalsie uz neprinesu
-        if (pocetNovych === 0 && torrenty.length > 0) {
-            logInfo("Query nepriniesol nove torrenty, koncim.");
-            break;
-        }
-        pokus++;
     }
 
     // Ak CSFD našlo URL, preskočíme name filter (aj bez searchu cez URL)
