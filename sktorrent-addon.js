@@ -57,6 +57,21 @@ function logApi(msg) { /* log removed for privacy */ }
 // ===================================================================
 const cache = new Map();
 
+// Prázdne/null výsledky (ČSFD dočasne down, SKTorrent login error a pod.)
+// sa nesmú cachovať na plnú TTL — inak by výpadok trval hodiny.
+const PRAZDNY_TTL_MS = 60 * 1000; // 60s
+
+function jePrazdnyVysledok(data) {
+    if (data === null || data === undefined) return true;
+    if (Array.isArray(data)) return data.length === 0;
+    if (typeof data === 'object') {
+        // špeciálny tvar z metadata: { nazvy: [], rok: null, meta: {...} }
+        if (Array.isArray(data.nazvy)) return data.nazvy.length === 0;
+        return Object.keys(data).length === 0;
+    }
+    return false;
+}
+
 async function withCache(key, ttlMs, fetcher) {
     const existujuci = cache.get(key);
     if (existujuci && Date.now() < existujuci.expires) {
@@ -66,7 +81,8 @@ async function withCache(key, ttlMs, fetcher) {
     logCache(`MISS: ${key}`);
     try {
         const data = await fetcher();
-        cache.set(key, { data, expires: Date.now() + ttlMs });
+        const vyslednaTtl = jePrazdnyVysledok(data) ? PRAZDNY_TTL_MS : ttlMs;
+        cache.set(key, { data, expires: Date.now() + vyslednaTtl });
         return data;
     } catch (error) {
         logError(`Failed to fetch key: ${key}`, error);
@@ -817,14 +833,16 @@ async function ziskatVsetkyNazvyARok(imdbId, vlastnyTyp, tmdbKey, tvdbKey) {
 // ===================================================================
 // Hľadanie a spracovanie Torrentov
 // ===================================================================
-async function hladatTorrenty(dotaz, userAxios, maxPages = 1) {
+async function hladatTorrenty(dotaz, userAxios, maxPages = 1, userKey = "") {
     if (!dotaz || dotaz.trim().length < 2) return [];
     
     // Ak hľadáme cez exaktný ČSFD link, chceme načítať viac stránok 
     // (napr. až 8), aby sme zachytili seriály s desiatkami epizód.
     const skutocneMaxPages = dotaz.includes("csfd.cz") ? Math.min(maxPages, 2) : maxPages;
     
-    return withCache(`search_paged_${skutocneMaxPages}:${dotaz}`, 600000, async () => {
+    // userKey = fingerprint účtu (hash uid) — výsledky závisia od SKTorrent session
+    // (VIP status, viditeľnosť 18+ obsahu), preto cache NESMIE byť zdieľaná medzi userov
+    return withCache(`search_paged_${userKey}_${skutocneMaxPages}:${dotaz}`, 600000, async () => {
         logApi(`Searching SKTorrent for: "${dotaz}" (Max pages: ${skutocneMaxPages})`);
         
         let vsetkyVysledky = [];
@@ -1214,9 +1232,19 @@ const app = express();
 app.use(cors());
 app.use(express.json()); 
 
+// Maskovanie config segmentu v URL — base64 config obsahuje uid/pass/debrid kľúče,
+// NESMIE sa dostať do logov. Nahradíme ho krátkym hashom.
+function maskConfigVUrl(url) {
+    // config je prvá časť cesty: /<config>/stream/... — base64url reťazec (A-Za-z0-9-_)
+    const match = url.match(/^\/([A-Za-z0-9_-]{20,})(?=\/)/);
+    if (!match) return url;
+    const hash = crypto.createHash("sha1").update(match[1]).digest("hex").slice(0, 8);
+    return url.replace(match[1], `cfg:${hash}`);
+}
+
 app.use((req, res, next) => {
     console.log(`\n======================================================`);
-    console.log(`[${getTime()}] 🌍 [HTTP REQUEST] -> ${req.method} ${req.originalUrl}`);
+    console.log(`[${getTime()}] 🌍 [HTTP REQUEST] -> ${req.method} ${maskConfigVUrl(req.originalUrl)}`);
     console.log(`[${getTime()}] 📡 IP: ${req.ip} | User-Agent: ${req.headers['user-agent']?.substring(0, 50)}...`);
     next(); 
 });
@@ -2228,7 +2256,9 @@ app.get('/:config/stream/:type/:id.json', async (req, res) => {
 
     const normalizedConfig = { uid: activeUid, pass: activePass, torbox: activeTorbox, tmdb: activeTmdb, tvdb: userConfig.tvdb, preferDub: activePreferDub };
     const userAxios = getFastAxios(normalizedConfig);
-    console.log(`\n====== 🎬 Hľadám pre UID: ${normalizedConfig.uid} | id='${id}' ======`);
+    // userKey = hash uid — fingerprint účtu pre cache namespacing (bez raw UID v logoch)
+    const userKey = crypto.createHash("sha1").update(String(activeUid || "")).digest("hex").slice(0, 8);
+    console.log(`\n====== 🎬 Hľadám (user: ${userKey}) | id='${id}' ======`);
 
     const jeToSerialPodlaId = id.includes(":");
     const [imdbId, sRaw, eRaw] = id.split(":");
@@ -2308,7 +2338,7 @@ app.get('/:config/stream/:type/:id.json', async (req, res) => {
     const zvysne = dotazyArr.slice(2);
 
     const vysledkyBatch = await Promise.all(prvyBatch.map(d =>
-        hladatTorrenty(d, userAxios, d.includes("csfd.cz") ? 2 : 2)
+        hladatTorrenty(d, userAxios, d.includes("csfd.cz") ? 2 : 2, userKey)
     ));
 
     for (let i = 0; i < prvyBatch.length; i++) {
@@ -2340,7 +2370,7 @@ app.get('/:config/stream/:type/:id.json', async (req, res) => {
         }
         if (pokus > 10) break;
         logInfo(`Search attempt ${pokus}: "${d?.slice(0, 60)}"`);
-        const najdene = await hladatTorrenty(d, userAxios, 2);
+        const najdene = await hladatTorrenty(d, userAxios, 2, userKey);
 
         let pocetNovych = 0;
         for (const t of najdene) {
