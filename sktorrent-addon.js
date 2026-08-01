@@ -15,7 +15,6 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-const { addonBuilder } = require("stremio-addon-sdk");
 const { decode } = require("entities");
 const axios = require("axios");
 const cheerio = require("cheerio");
@@ -35,7 +34,6 @@ const PORT = process.env.PORT || 7000;
 const PUBLIC_URL = process.env.PUBLIC_URL || (process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : `http://localhost:${PORT}`); 
 const BASE_URL = "https://sktorrent.eu"; 
 const SEARCH_URL = `${BASE_URL}/torrent/torrents_v2.php`;
-const TVDB_API_KEY = "d786995d-7841-4640-a4a5-8d30592d1651";
 
 const agentOptions = { keepAlive: true, maxSockets: 50 };
 
@@ -72,23 +70,46 @@ function jePrazdnyVysledok(data) {
     return false;
 }
 
+// Single-flight: ak už pre rovnaký key beží fetcher, počkáme naň namiesto
+// paralelného opakovania (Stremio retry-uje requesty, nechceme 4x drahý search).
+const inflight = new Map();
+
 async function withCache(key, ttlMs, fetcher) {
     const existujuci = cache.get(key);
     if (existujuci && Date.now() < existujuci.expires) {
         logCache(`HIT: ${key}`);
         return existujuci.data;
     }
-    logCache(`MISS: ${key}`);
-    try {
-        const data = await fetcher();
-        const vyslednaTtl = jePrazdnyVysledok(data) ? PRAZDNY_TTL_MS : ttlMs;
-        cache.set(key, { data, expires: Date.now() + vyslednaTtl });
-        return data;
-    } catch (error) {
-        logError(`Failed to fetch key: ${key}`, error);
-        return null;
+    if (inflight.has(key)) {
+        logCache(`INFLIGHT WAIT: ${key}`);
+        return inflight.get(key);
     }
+    logCache(`MISS: ${key}`);
+    const promise = (async () => {
+        try {
+            const data = await fetcher();
+            const vyslednaTtl = jePrazdnyVysledok(data) ? PRAZDNY_TTL_MS : ttlMs;
+            cache.set(key, { data, expires: Date.now() + vyslednaTtl });
+            return data;
+        } catch (error) {
+            logError(`Failed to fetch key: ${key}`, error);
+            return null;
+        } finally {
+            inflight.delete(key);
+        }
+    })();
+    inflight.set(key, promise);
+    return promise;
 }
+
+// Pravidelný sweep expirovaných záznamov — cache inak rastie donekonečna
+// (expirácia sa doteraz kontrolovala len pri čítaní).
+setInterval(() => {
+    const teraz = Date.now();
+    for (const [k, v] of cache) {
+        if (teraz >= v.expires) cache.delete(k);
+    }
+}, 600000).unref(); // každých 10 min, neblokuje shutdown
 
 
 function pLimit(limit) {
@@ -117,12 +138,17 @@ function decodeConfig(configString) {
     }
 }
 
+// Zdieľané keepAlive agenty — NIE nový http.Agent/https.Agent per request.
+// Nové agenty per request by držali otvorené keepAlive sockety a leakovali.
+const sharedHttpAgent = new http.Agent(agentOptions);
+const sharedHttpsAgent = new https.Agent(agentOptions);
+
 function getFastAxios(userConfig) {
     const { uid, pass } = userConfig;
     return axios.create({
         timeout: 5000, 
-        httpAgent: new http.Agent(agentOptions),
-        httpsAgent: new https.Agent(agentOptions),
+        httpAgent: sharedHttpAgent,
+        httpsAgent: sharedHttpsAgent,
         headers: {
             "User-Agent": "Mozilla/5.0",
             "Cookie": `uid=${uid}; pass=${pass}`,
@@ -710,7 +736,8 @@ async function pridajTvdbNazvy(nazvy, tvdbId, tvdbKey) {
     const token = await getTvdbToken(tvdbKey);
     if (!token) return;
     
-    for (const lang of ["slk", "ces", "eng"]) {
+    // Paralelne namiesto sekvenčne — 3 volania naraz (ušetrí ~2x latenciu)
+    await Promise.allSettled(["slk", "ces", "eng"].map(async (lang) => {
         try {
             const res = await axios.get(`https://api4.thetvdb.com/v4/series/${tvdbId}/translations/${lang}`, {
                 headers: { "Authorization": `Bearer ${token}` },
@@ -722,7 +749,7 @@ async function pridajTvdbNazvy(nazvy, tvdbId, tvdbKey) {
                 logApi(`TVDB (${lang}): ${name.trim()}`);
             }
         } catch (e) { /* translation not found for this lang, skip */ }
-    }
+    }));
 }
 
 async function ziskatVsetkyNazvyARok(imdbId, vlastnyTyp, tmdbKey, tvdbKey) {
@@ -879,6 +906,16 @@ async function hladatTorrenty(dotaz, userAxios, maxPages = 1, userKey = "") {
                     const velkostMatch = text.match(/Velkost\s([^|]+)/i);
                     const seedMatch = text.match(/Odosielaju\s*:\s*(\d+)/i);
 
+                    // Žánre torrentu (linky title="Filmový žáner X" / href*="zaner=")
+                    // — potrebné pre 18+ filter (kategória môže byť "Filmy CZ/SK dabing",
+                    // ale žáner "Eroticky" odhalí obsah). Čistá kategória xXx už odpadla
+                    // vo filtri nižšie.
+                    const zanre = [];
+                    bunka.find('a[href*="zaner="]').each((j, el) => {
+                        const t = $(el).text().trim();
+                        if (t) zanre.push(t);
+                    });
+
                     if (!kategoria.toLowerCase().includes("film") && !kategoria.toLowerCase().includes("seri") &&
                         !kategoria.toLowerCase().includes("dokum") && !kategoria.toLowerCase().includes("tv")) return;
 
@@ -888,6 +925,7 @@ async function hladatTorrenty(dotaz, userAxios, maxPages = 1, userKey = "") {
                         size: velkostMatch ? velkostMatch[1].trim() : "?",
                         seeds: seedMatch ? parseInt(seedMatch[1]) : 0,
                         category: kategoria,
+                        zanre: zanre,
                         downloadUrl: `${BASE_URL}/torrent/download.php?id=${torrentId}`
                     });
                     najdeneNaStranke++;
@@ -945,19 +983,6 @@ async function stiahnutTorrentData(url, userAxios) {
             return { infoHash, files: subory };
         } catch (chyba) {
             logError(`Failed to download/parse .torrent from ${url}`, chyba);
-            return null;
-        }
-    });
-}
-
-async function stiahnutSurovyTorrent(url, userAxios) {
-    return withCache(`rawtorrent:${url}`, 86400000, async () => {
-        try {
-            const res = await userAxios.get(url, { responseType: "arraybuffer" });
-            const bufferString = res.data.toString("utf8", 0, 50);
-            if (bufferString.includes("<html") || bufferString.includes("<!DOC")) return null;
-            return res.data; 
-        } catch (chyba) {
             return null;
         }
     });
@@ -1220,6 +1245,9 @@ if (videoSubory.length === 1) {
         _sortHdr: hdrTag,
         _sortSource: sourceTag,
         _sortRdBlocked: jeRdBlokovany ? 1 : 0,
+        _sortName: cistyNazov,
+        _sortCategory: t.category || "",
+        _sortZaner: Array.isArray(t.zanre) ? t.zanre.join(",") : "",
         dubLang: jeSKCZ ? (langMatch.find(function(l) { return /^(CZ|SK)$/i.test(l); }) || '').toLowerCase() : ''
     };
 
@@ -1242,6 +1270,10 @@ function maskConfigVUrl(url) {
     return url.replace(match[1], `cfg:${hash}`);
 }
 
+// Express 4 nechytá rejected promises v async handleroch — request by visel bez odpovede
+// (Stremio by to videl ako timeout a retry-oval). Tento wrapper pošle chybu do error middlewaru.
+const asyncRoute = (fn) => (req, res, next) => Promise.resolve(fn(req, res, next)).catch(next);
+
 app.use((req, res, next) => {
     console.log(`\n======================================================`);
     console.log(`[${getTime()}] 🌍 [HTTP REQUEST] -> ${req.method} ${maskConfigVUrl(req.originalUrl)}`);
@@ -1251,7 +1283,32 @@ app.use((req, res, next) => {
 
 // --- Web UI ---
 // --- API: SKTorrent Login Proxy ---
-app.post('/api/sktorrent-login', async (req, res) => {
+// In-memory rate limiting (bez dependency) — login proxy by sa dal zneužiť na
+// brute-force SKTorrent účtov cez tento server. 20 pokusov / 10 min / IP.
+const loginPokusy = new Map();
+function skontrolujLoginRateLimit(ip) {
+    const teraz = Date.now();
+    const okno = 10 * 60 * 1000; // 10 min
+    const zoznam = (loginPokusy.get(ip) || []).filter(t => teraz - t < okno);
+    if (zoznam.length >= 20) {
+        loginPokusy.set(ip, zoznam);
+        return true; // limit dosiahnutý
+    }
+    zoznam.push(teraz);
+    loginPokusy.set(ip, zoznam);
+    // občasné upratovanie, nech mapa nerastie donekonečna
+    if (loginPokusy.size > 1000) {
+        for (const [k, v] of loginPokusy) {
+            if (v.every(t => teraz - t >= okno)) loginPokusy.delete(k);
+        }
+    }
+    return false;
+}
+
+app.post('/api/sktorrent-login', asyncRoute(async (req, res) => {
+    if (skontrolujLoginRateLimit(req.ip || "unknown")) {
+        return res.status(429).json({ error: 'Príliš veľa pokusov o prihlásenie, skús to neskôr.' });
+    }
     const { username, password } = req.body;
     if (!username || !password) {
         return res.status(400).json({ error: 'Chýba meno alebo heslo' });
@@ -1292,7 +1349,7 @@ app.post('/api/sktorrent-login', async (req, res) => {
         logError('SKTorrent login proxy error', error);
         res.status(500).json({ error: 'Chyba pri prihlasovaní k SKTorrent' });
     }
-});
+}));
 app.get('/', (req, res) => {
     res.redirect(302, '/configure');
 });
@@ -2187,7 +2244,7 @@ app.get('/:config?/catalog/:type/:id.json', (req, res) => {
 });
 
 // --- Stream Route ---
-app.get('/:config/stream/:type/:id.json', async (req, res) => {
+app.get('/:config/stream/:type/:id.json', asyncRoute(async (req, res) => {
     // Zabránime cacheovaniu na úrovni nginx/CDN — každý refresh musí ísť do addonu
     res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, private, max-age=0, s-maxage=0');
     res.setHeader('Pragma', 'no-cache');
@@ -2338,7 +2395,7 @@ app.get('/:config/stream/:type/:id.json', async (req, res) => {
     const zvysne = dotazyArr.slice(2);
 
     const vysledkyBatch = await Promise.all(prvyBatch.map(d =>
-        hladatTorrenty(d, userAxios, d.includes("csfd.cz") ? 2 : 2, userKey)
+        hladatTorrenty(d, userAxios, 2, userKey)
     ));
 
     for (let i = 0; i < prvyBatch.length; i++) {
@@ -2486,6 +2543,9 @@ app.get('/:config/stream/:type/:id.json', async (req, res) => {
                     _sortDubLang: stream.isDub ? (stream.dubLang || '') : '',
                     _sortHdr: stream._sortHdr || '',
                     _sortSource: stream._sortSource || 'neznámy',
+                    _sortName: stream._sortName || '',
+                    _sortCategory: stream._sortCategory || '',
+                    _sortZaner: stream._sortZaner || '',
                     _sortQuality: getQualityRank(sortText),
                     _sortSize: getSizeBytes(sortText),
                     _sortSeeds: stream.seeds || 0
@@ -2572,8 +2632,11 @@ app.get('/:config/stream/:type/:id.json', async (req, res) => {
             streamy = streamy.filter(s => {
                 const name = (s._sortName || '').toLowerCase();
                 const cat = (s._sortCategory || '').toLowerCase();
-                const adultKeywords = ['erotick','porn','xxx','adult','18+','sex','onlyfans'];
-                if (cat.includes('erotick')) return false;
+                const zaner = (s._sortZaner || '').toLowerCase();
+                const adultKeywords = ['erotick','porn','xxx','adult','18+','sex','onlyfans','erotika'];
+                // Kategória xXx (aj "xXx hry (18+)") a žáner Eroticky — podľa sktorrent.eu
+                if (cat.includes('xxx') || zaner.includes('erotick')) return false;
+                // Názov torrentu obsahuje adult výrazy
                 for (let ki = 0; ki < adultKeywords.length; ki++) {
                     if (name.includes(adultKeywords[ki])) return false;
                 }
@@ -2667,7 +2730,7 @@ app.get('/:config/stream/:type/:id.json', async (req, res) => {
         }
 
         // Odstrániť interné _sort polia
-        streamy = streamy.map(({ _sortCached, _sortRdBlocked, _sortDub, _sortDubLang, _sortName, _sortCategory, _sortHdr, _sortSource, _sortQuality, _sortSize, _sortSeeds, ...rest }) => rest);
+        streamy = streamy.map(({ _sortCached, _sortRdBlocked, _sortDub, _sortDubLang, _sortName, _sortCategory, _sortZaner, _sortHdr, _sortSource, _sortQuality, _sortSize, _sortSeeds, ...rest }) => rest);
 
         // 7. Max results limit
         const maxResultsVal = parseInt(userConfig.maxResults || '0');
@@ -2686,13 +2749,13 @@ app.get('/:config/stream/:type/:id.json', async (req, res) => {
         }
 
         return res.json({ streams: streamy });
-    });
+    }));
 
 
 // =========================================================================
 // TORBOX PROXY ROUTER
 // =========================================================================
-app.get('/:config/play/:hash/:seria/:epizoda/:fileName', async (req, res) => {
+app.get('/:config/play/:hash/:seria/:epizoda/:fileName', asyncRoute(async (req, res) => {
     const { hash, seria, epizoda, config } = req.params;
     const decodedFileName = decodeURIComponent(req.params.fileName || "").replace(/\|/g, "/");
     logApi(`Play Request: Hash: ${hash} | S${seria}E${epizoda} | File: ${decodedFileName}`);
@@ -2714,13 +2777,14 @@ app.get('/:config/play/:hash/:seria/:epizoda/:fileName', async (req, res) => {
     }
 
     return res.status(400).send("Neznámy debrid provider.");
-});
+}));
 
 async function handleTorboxPlay(req, res, hash, seria, epizoda, decodedFileName, userConfig, TORBOX_API_KEY) {
     logApi(`TorBox Play Request: Hash: ${hash} | S${seria}E${epizoda} | File: ${decodedFileName}`);
     try {
         const tbTorrentsRes = await axios.get("https://api.torbox.app/v1/api/torrents/mylist", {
-            headers: { Authorization: `Bearer ${TORBOX_API_KEY}` }
+            headers: { Authorization: `Bearer ${TORBOX_API_KEY}` },
+            timeout: 10000
         });
 
         let torrentId = null;
@@ -2740,14 +2804,16 @@ async function handleTorboxPlay(req, res, hash, seria, epizoda, decodedFileName,
             formData.append("seed_instantly", "true");
 
             const addRes = await axios.post("https://api.torbox.app/v1/api/torrents/createtorrent", formData, {
-                headers: { Authorization: `Bearer ${TORBOX_API_KEY}`, ...formData.getHeaders() }
+                headers: { Authorization: `Bearer ${TORBOX_API_KEY}`, ...formData.getHeaders() },
+                timeout: 15000
             });
 
             torrentId = addRes.data?.data?.torrent_id;
 
             await new Promise(r => setTimeout(r, 3000));
             const tbRefreshRes = await axios.get("https://api.torbox.app/v1/api/torrents/mylist", {
-                headers: { Authorization: `Bearer ${TORBOX_API_KEY}` }
+                headers: { Authorization: `Bearer ${TORBOX_API_KEY}` },
+                timeout: 10000
             });
 
             if (tbRefreshRes.data && tbRefreshRes.data.data) {
@@ -2828,7 +2894,8 @@ async function handleTorboxPlay(req, res, hash, seria, epizoda, decodedFileName,
                 file_id: spravneFileId,
                 zip_link: false
             },
-            headers: { Authorization: `Bearer ${TORBOX_API_KEY}` }
+            headers: { Authorization: `Bearer ${TORBOX_API_KEY}` },
+            timeout: 15000
         });
 
 const directLink = downloadRes.data?.data;
@@ -2953,7 +3020,7 @@ async function handleRealDebridPlay(req, res, hash, decodedFileName, RD_API_KEY)
 
 
 
-app.get("/:config/download/:hash/:sktId", async (req, res) => {
+app.get("/:config/download/:hash/:sktId", asyncRoute(async (req, res) => {
     const { hash, sktId, config } = req.params;
 
     const userConfig = decodeConfig(config);
@@ -3121,7 +3188,7 @@ app.get("/:config/download/:hash/:sktId", async (req, res) => {
         logError("Debrid API download/upload error", err);
         res.status(500).send("Chyba API sťahovania debrid služby.");
     }
-});
+}));
 
 
 app.get("/logo.jpg", (req, res) => {
@@ -3138,6 +3205,17 @@ app.get("/ko-fi-logo.jpg", (req, res) => {
 
 app.get("/info-video", (req, res) => {
     res.sendFile(path.join(__dirname, "stahuje-sa.mp4")); 
+});
+
+// Error middleware — Express 4 default vráti HTML stacktrace; tu vrátime čistú JSON/plain odpoveď
+// (bez leaknutia interných detailov) a zalogujeme chybu.
+app.use((err, req, res, next) => {
+    logError(`Unhandled error na ${req.method} ${maskConfigVUrl(req.originalUrl)}`, err);
+    if (res.headersSent) return next(err);
+    if (req.path.includes("/stream/")) {
+        return res.status(500).json({ streams: [] });
+    }
+    res.status(500).send("Chyba servera.");
 });
 
 // Export pre Genezio (httpServer typ)

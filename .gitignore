@@ -40,3 +40,4 @@ build/
 *.torrent
 
 
+cloudflared.deb
