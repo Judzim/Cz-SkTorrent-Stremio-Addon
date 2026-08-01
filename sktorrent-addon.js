@@ -2342,65 +2342,68 @@ app.get('/:config/stream/:type/:id.json', asyncRoute(async (req, res) => {
     });
     const unikatneNazvy = [...new Set(zakladneNazvy)];
 
-    const dotazy = new Set();
-
     // 2. ČSFD LINK — hľadáme podľa presného ČSFD URL (nájde aj tituly s odlišným SK/CZ názvom)
         const hlavnyNazov = metaData?.meta?.titleOriginal || unikatneNazvy[0];
         const csfdLink = await ziskatCsfdUrl(imdbId, hlavnyNazov, vydanyRok, vlastnyTyp);
     
-    if (csfdLink) {
-        dotazy.add(csfdLink); 
-    }
-    
-    // 3. Textové hľadanie — SKTorrent search je čistý substring search na názve
-    // (overené testom: "Na noze" → 24 výsledkov, "Na noze S03E04" → 0, diakritika
-    // ignorovaná). Epizódové/sériové tagy sú VŽDY podmnožina základného názvu,
-    // takže ich nemá zmysel hľadať zvlášť — správnu epizódu vyberie client-side filter.
-    // Menej query = rýchlejšie aj šetrnejšie k trackeru.
-    unikatneNazvy.forEach(zaklad => {
-        const bezDia = odstranDiakritiku(zaklad);
-        const kratky = skratNazov(bezDia, 3);
-        if (bezDia.trim()) dotazy.add(bezDia);
-        if (kratky.trim() && kratky !== bezDia) dotazy.add(kratky);
-    });
-
     let torrenty = [];
     const videnieTorrentIds = new Set();
     let uspesneNajdeneCezCsfd = false;
 
-    // VŠETKY query spustíme paralelne — query set je teraz malý (CSFD URL + 1-2 názvy),
-    // takže nie je dôvod ich deliť na batch a sekvenčnú časť. SKTorrent zvláda
-    // paralelné requesty (max ~3-4), a celkovo ho zaťažíme MENEJ ako predtým
-    // (3-4 query namiesto 12).
-    const dotazyArr = [...dotazy];
-    const vysledkyBatch = await Promise.all(dotazyArr.map(d =>
-        hladatTorrenty(d, userAxios, 2, userKey)
-    ));
-
-    for (let i = 0; i < dotazyArr.length; i++) {
-        const d = dotazyArr[i];
-        const najdene = vysledkyBatch[i] || [];
+    const spracujVysledky = (d, najdene) => {
         logInfo(`Search result: "${d?.slice(0, 60)}" → ${najdene.length} torrentov`);
-
         for (const t of najdene) {
             if (!videnieTorrentIds.has(t.id)) {
                 torrenty.push(t);
                 videnieTorrentIds.add(t.id);
             }
         }
-
-        if (d === csfdLink && torrenty.length > 0) {
+        if (d === csfdLink && najdene.length > 0) {
             logSuccess(`Nájdené cez ČSFD Link. Mám ${torrenty.length} výsledkov.`);
             uspesneNajdeneCezCsfd = true;
         }
+    };
+
+    // ── BATCH 1: CSFD URL + primárny názov (max 2 query, paralelne) ──
+    // SKTorrent search je čistý substring search — primárny názov (bez diakritiky)
+    // nájde pack aj epizódy, správnu epizódu vyberie client-side filter.
+    const primarnyBezDia = odstranDiakritiku(unikatneNazvy[0] || "").trim();
+    const prveDotazy = [];
+    if (csfdLink) prveDotazy.push(csfdLink);
+    if (primarnyBezDia) prveDotazy.push(primarnyBezDia);
+
+    const vysledkyBatch = await Promise.all(prveDotazy.map(d =>
+        hladatTorrenty(d, userAxios, 2, userKey)
+    ));
+    prveDotazy.forEach((d, i) => spracujVysledky(d, vysledkyBatch[i] || []));
+
+    // ── FALLBACK: len ak batch 1 nič nenašiel ──
+    // Kratšie názvy (3 slová) a ostatné jazykové varianty — ale NIE epizódové tagy
+    // (sú vždy podmnožina základného názvu) a nie generické jednoslovné query
+    // (vracajú garbage — napr. "Odysea" → 36 irelevantných torrentov).
+    if (torrenty.length === 0) {
+        const fallback = [];
+        unikatneNazvy.forEach(z => {
+            const bezDia = odstranDiakritiku(z).trim();
+            if (!bezDia || bezDia === primarnyBezDia) return;
+            fallback.push(bezDia);
+            const kratky = skratNazov(bezDia, 3);
+            if (kratky && kratky !== bezDia) fallback.push(kratky);
+        });
+        // kratší variant primárneho názvu ako prvý (ak je dlhý)
+        const primKratky = skratNazov(primarnyBezDia, 3);
+        if (primKratky && primKratky !== primarnyBezDia) fallback.unshift(primKratky);
+
+        const unikFallback = [...new Set(fallback)].slice(0, 4); // max 4, nech nepreťažíme tracker
+        const vysledkyFb = await Promise.all(unikFallback.map(d =>
+            hladatTorrenty(d, userAxios, 2, userKey)
+        ));
+        unikFallback.forEach((d, i) => spracujVysledky(d, vysledkyFb[i] || []));
     }
 
-    // Ak CSFD našlo URL, preskočíme name filter (aj bez searchu cez URL)
-    if (csfdLink && torrenty.length > 0 && !uspesneNajdeneCezCsfd) {
-        uspesneNajdeneCezCsfd = true;
-        logSuccess(`CSFD URL známa, preskakujem name filter.`);
-    }
-
+    // Name filter preskočíme LEN ak CSFD query reálne našla torrenty (sú to presné
+    // zhody). Ak CSFD link existuje ale query nič nevrátila, filter beží — inak by
+    // cez generické fallback query prešiel garbage (iné filmy s podobným názvom).
     if (!uspesneNajdeneCezCsfd) {
         const predNameFiltrom = torrenty.length;
         torrenty = torrenty.filter(t => {
