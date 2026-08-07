@@ -413,41 +413,6 @@ async function rdPaginateTorrents(apiKey) {
 }
 
 // ===================================================================
-// RD INSTANT CACHE (instantAvailability) — autoritatívny check shared cache
-// ===================================================================
-// Real-Debrid nie je seedbox: „mám to v účte“ (status downloaded) ≠ „je to
-// v instant cache“. Pre správny ⚡/⏳ status a priame prehratie treba overiť
-// /torrents/instantAvailability — endpoint berie hashe ako cesty v URL
-// (max 100 na request, jeden batch = 1 API call).
-async function rdInstantAvailability(apiKey, hashes) {
-    if (!apiKey || !hashes || hashes.length === 0) return {};
-    const vysledok = {};
-    const unikatne = [...new Set(hashes.map(h => h.toLowerCase()))];
-
-    for (let i = 0; i < unikatne.length; i += 100) {
-        const chunk = unikatne.slice(i, i + 100);
-        try {
-            const res = await axios.get(
-                `${RD_API_BASE}/torrents/instantAvailability/${chunk.join('/')}`,
-                { headers: rdHeaders(apiKey), timeout: 15000 }
-            );
-            if (res.data && typeof res.data === 'object') {
-                for (const [h, val] of Object.entries(res.data)) {
-                    // val = { rd: [ {filename, filesize}, ... ] } | null
-                    // Neprázdne pole rd = súbor je v instant cache → hrateľné hneď
-                    if (val && Array.isArray(val.rd) && val.rd.length > 0) {
-                        vysledok[h.toLowerCase()] = true;
-                    }
-                }
-            }
-        } catch (error) {
-            logWarn(`RD instantAvailability zlyhal (chunk ${Math.floor(i / 100) + 1}): ${error.message}`);
-        }
-    }
-    return vysledok;
-}
-
-// ===================================================================
 // NOVÝ RD CACHE CHECK (lokálna cache + fallback /torrents)
 // ===================================================================
 async function overitRealDebridCache(infoHashes, rdKey) {
@@ -461,7 +426,8 @@ async function overitRealDebridCache(infoHashes, rdKey) {
     const unikatneHashe = [...new Set(platneHashe)].map(h => h.toLowerCase());
     const cacheMap = {};
 
-    // 1. Lokálna cache — instant
+    // 1. Lokálna cache — instant (zdieľaná databáza: hashe nahrané všetkými
+    //    userami addonu pri úspešnom prehratí/stiahnutí cez RD + refresh)
     for (const hash of unikatneHashe) {
         if (rdCache[hash]) {
             cacheMap[hash] = true;
@@ -469,28 +435,12 @@ async function overitRealDebridCache(infoHashes, rdKey) {
     }
     logCache(`RD cache: ${Object.keys(cacheMap).length}/${unikatneHashe.length} z lokálnej cache`);
 
-    // 2. RD instant cache (instantAvailability) — shared cache, autoritatívne.
-    //    Bez tohto kroku by hashe, ktoré sú v RD instant cache ale NIE v našej
-    //    histórii sťahovaní, dostali ⏳ namiesto ⚡ a prehrávali by sa cez
-    //    info-video obchádzku. Jeden batched call pokryje všetky chýbajúce.
+    // 2. Ak nejaké chýbajú, skúsime refresh /torrents (max 1x za 5 min)
+    //    — pridá hashe so statusom 'downloaded' z účtu aktívneho usera
     const chybajuceHashe = unikatneHashe.filter(h => !cacheMap[h]);
-    if (chybajuceHashe.length > 0) {
-        const instant = await rdInstantAvailability(rdKey, chybajuceHashe);
-        for (const [h, ok] of Object.entries(instant)) {
-            if (ok && !cacheMap[h]) {
-                cacheMap[h] = true;
-                logCache(`RD instant-cached: ${h.substring(0,12)}...`);
-            }
-        }
-    }
-
-    // 3. Ak ešte stále nejaké chýbajú, skúsime refresh /torrents (max 1x za 5 min)
-    //    — pokrýva OSOBNÉ stiahnutia, ktoré nie sú v shared instant cache
-    //    (RD stiahol torrent z peerov iba pre nás; status downloaded = hrateľné).
-    const chybajuceHashePoInstant = unikatneHashe.filter(h => !cacheMap[h]);
     const now = Date.now();
 
-    if (chybajuceHashePoInstant.length > 0 && (now - rdLastRefresh > RD_CACHE_REFRESH_INTERVAL)) {
+    if (chybajuceHashe.length > 0 && (now - rdLastRefresh > RD_CACHE_REFRESH_INTERVAL)) {
         if (!rdRefreshPromise) {
             rdRefreshPromise = rdPaginateTorrents(rdKey).finally(() => {
                 rdRefreshPromise = null;
@@ -506,7 +456,7 @@ async function overitRealDebridCache(infoHashes, rdKey) {
             logWarn(`RD cache refresh zlyhal: ${e.message}`);
         }
 
-        for (const hash of chybajuceHashePoInstant) {
+        for (const hash of chybajuceHashe) {
             if (rdCache[hash]) {
                 cacheMap[hash] = true;
                 logCache(`RD cached po refreshi: ${hash.substring(0,12)}...`);
@@ -2962,12 +2912,12 @@ async function handleRealDebridPlay(req, res, hash, decodedFileName, RD_API_KEY)
             await rdSelectFiles(RD_API_KEY, torrentId, fileIds);
         }
 
-        // 4. Skontrolujeme či je cached (progress 100 = instant)
+        // 4. Skontrolujeme či je cached (progress 100 = torrent je hotový)
         info = await rdTorrentInfo(RD_API_KEY, torrentId);
         // Po selectFiles potrebuje RD chvíľu, kým prejde na status downloaded —
-        // aj pri instant cache (progress 100, status ešte downloading). Čakáme
-        // max 10 s LEN ak je progress 100; ak sa reálne sťahuje (progress < 100),
-        // nejdeme čakať a rovno presmerujeme na info-video.
+        // aj keď je torrent už hotový (progress 100, status ešte downloading).
+        // Čakáme max 10 s LEN ak je progress 100; ak sa reálne sťahuje
+        // (progress < 100), nejdeme čakať a rovno presmerujeme na info-video.
         if (info.progress === 100 && info.status !== 'downloaded') {
             for (let i = 0; i < 10 && info.status !== 'downloaded'; i++) {
                 await new Promise(r => setTimeout(r, 1000));
@@ -3177,8 +3127,8 @@ app.get("/:config/download/:hash/:sktId", asyncRoute(async (req, res) => {
             }
 
             info = await rdTorrentInfo(debridApiKey, torrentId);
-            // Instant cache: po selectFiles prejde status na downloaded behom pár
-            // sekúnd — počkáme max 10 s (len ak progress=100), inak info-video.
+            // Keď je torrent hotový (progress 100), RD prejde na status downloaded
+            // behom pár sekúnd — počkáme max 10 s, inak info-video.
             if (info.progress === 100 && info.status !== 'downloaded') {
                 for (let i = 0; i < 10 && info.status !== 'downloaded'; i++) {
                     await new Promise(r => setTimeout(r, 1000));
