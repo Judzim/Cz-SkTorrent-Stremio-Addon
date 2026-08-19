@@ -760,6 +760,32 @@ async function pridajTvdbNazvy(nazvy, tvdbId, tvdbKey) {
     }));
 }
 
+// TVDB fallback podľa IMDb ID — pre seriály, ktoré TMDB nepozná
+// (napr. nové SK/CZ relácie ako "Párty Shore Slovensko" — TMDB prázdne,
+// ale TVDB ich má). Search podľa imdbId → TVDB ID → preklady názvov.
+async function pridajTvdbNazvyPodlaImdb(nazvy, imdbId, tvdbKey) {
+    if (!imdbId || !tvdbKey) return false;
+    const token = await getTvdbToken(tvdbKey);
+    if (!token) return false;
+    try {
+        const res = await axios.get("https://api4.thetvdb.com/v4/search", {
+            params: { imdbId },
+            headers: { "Authorization": `Bearer ${token}` },
+            timeout: 5000
+        });
+        const items = res.data?.data;
+        if (Array.isArray(items) && items.length > 0) {
+            const tvdbId = items[0].id;
+            logApi(`TVDB search IMDb ${imdbId} → TVDB ID ${tvdbId}`);
+            await pridajTvdbNazvy(nazvy, tvdbId, tvdbKey);
+            return true;
+        }
+    } catch (e) {
+        logWarn(`TVDB search IMDb ${imdbId} zlyhal: ${e.message}`);
+    }
+    return false;
+}
+
 async function ziskatVsetkyNazvyARok(imdbId, vlastnyTyp, tmdbKey, tvdbKey) {
     return withCache(`names_year_v2:${imdbId}`, 21600000, async () => { 
         logApi(`Fetching metadata pre IMDB ID: ${imdbId} (${vlastnyTyp})`);
@@ -843,15 +869,21 @@ async function ziskatVsetkyNazvyARok(imdbId, vlastnyTyp, tmdbKey, tvdbKey) {
         }
 
         // ── TVDB fallback: získať slovenský/český názov ──
-        if (vlastnyTyp === "series" && tmdbId && tvdbKey) {
-            try {
-                const extRes = await axios.get(`https://api.themoviedb.org/3/tv/${tmdbId}/external_ids`, { params: { api_key: tmdbKey }, timeout: 4000 });
-                const tvdbId = extRes.data?.tvdb_id;
-                if (tvdbId) {
-                    logApi(`TVDB fallback pre TMDB ID ${tmdbId} → TVDB ID ${tvdbId}`);
-                    await pridajTvdbNazvy(nazvy, tvdbId, tvdbKey);
-                }
-            } catch (e) { logWarn(`TVDB fallback failed pre TMDB ${tmdbId}`); }
+        if (vlastnyTyp === "series" && tvdbKey) {
+            if (tmdbId) {
+                // Štandardná cesta: TMDB external_ids → TVDB ID
+                try {
+                    const extRes = await axios.get(`https://api.themoviedb.org/3/tv/${tmdbId}/external_ids`, { params: { api_key: tmdbKey }, timeout: 4000 });
+                    const tvdbId = extRes.data?.tvdb_id;
+                    if (tvdbId) {
+                        logApi(`TVDB fallback pre TMDB ID ${tmdbId} → TVDB ID ${tvdbId}`);
+                        await pridajTvdbNazvy(nazvy, tvdbId, tvdbKey);
+                    }
+                } catch (e) { logWarn(`TVDB fallback failed pre TMDB ${tmdbId}`); }
+            } else {
+                // TMDB seriál nepozná (nové SK/CZ relácie) — TVDB search priamo podľa IMDb ID
+                await pridajTvdbNazvyPodlaImdb(nazvy, imdbId, tvdbKey);
+            }
         }
 
         if (!titleOriginal) titleOriginal = titleCz; 
