@@ -778,6 +778,28 @@ async function pridajImdbSuggestionNazov(nazvy, imdbId) {
     return false;
 }
 
+// TMDB fallback podľa TMDB ID — pre seriály z AioMetadata (tmdb:295879),
+// ktoré Cinemeta nepozná. Používa tmdbKey z user configu (rovnaký vzor ako ziskatVsetkyNazvyARok).
+async function pridajTmdbNazvy(nazvy, tmdbId, tmdbKey) {
+    if (!tmdbKey) return;
+    try {
+        const [det, trans] = await Promise.all([
+            axios.get(`https://api.themoviedb.org/3/tv/${tmdbId}`, { params: { api_key: tmdbKey }, timeout: 4000 }).catch(() => null),
+            axios.get(`https://api.themoviedb.org/3/tv/${tmdbId}/translations`, { params: { api_key: tmdbKey }, timeout: 4000 }).catch(() => null)
+        ]);
+        if (det?.data) {
+            if (det.data.name) nazvy.add(det.data.name.trim());
+            if (det.data.original_name && det.data.original_name !== det.data.name) nazvy.add(det.data.original_name.trim());
+        }
+        if (trans?.data?.translations) {
+            ["sk", "cs", "en"].forEach(lang => {
+                const t = trans.data.translations.find(x => x.iso_639_1 === lang && x.data?.name);
+                if (t?.data?.name) nazvy.add(t.data.name.trim());
+            });
+        }
+    } catch (e) { /* ignore */ }
+}
+
 // TVDB fallback podľa IMDb ID — pre seriály, ktoré TMDB nepozná
 // (napr. nové SK/CZ relácie ako "Párty Shore Slovensko" — TMDB prázdne,
 // ale TVDB ich má). Search podľa imdbId → TVDB ID → preklady názvov.
@@ -2296,7 +2318,7 @@ const handleManifest = (req, res) => {
         types: ["movie", "series"],
         catalogs: [],
         resources: ["stream"],
-        idPrefixes: ["tt", "tvdb-", "tvdb:"],
+        idPrefixes: ["tt", "tvdb-", "tvdb:", "tmdb:"],
         behaviorHints: {
             configurable: true,
             configurationRequired: false
@@ -2397,6 +2419,10 @@ app.get('/:config/stream/:type/:id.json', asyncRoute(async (req, res) => {
     const tvdbIdMatch = rawId.match(/^tvdb[-: ]?(\d+)$/);
     const jeTvdbId = !!tvdbIdMatch;
 
+    // TMDB ID formát (z AioMetadata): tmdb:295879 alebo tmdb:295879:1:1
+    const tmdbIdMatch = rawId.match(/^tmdb:(\d+)$/);
+    const jeTmdbId = !!tmdbIdMatch;
+
     // 1. ZÍSKAME NÁZVY A ROK a META
     let metaData = null;
     if (jeTvdbId) {
@@ -2410,6 +2436,19 @@ app.get('/:config/stream/:type/:id.json', asyncRoute(async (req, res) => {
                 meta: { titleOriginal: [...nazvy][0], titleCz: [...nazvy][0], yearStart: null, yearEnd: null }
             };
             logApi(`TVDB ID ${tvdbId} → názvy: ${[...nazvy].join(", ")}`);
+        }
+    }
+    if (jeTmdbId) {
+        const tmdbId = tmdbIdMatch[1];
+        const nazvy = new Set();
+        await pridajTmdbNazvy(nazvy, tmdbId, userConfig.tmdb);
+        if (nazvy.size > 0) {
+            metaData = {
+                nazvy: [...nazvy],
+                rok: null,
+                meta: { titleOriginal: [...nazvy][0], titleCz: [...nazvy][0], yearStart: null, yearEnd: null }
+            };
+            logApi(`TMDB ID ${tmdbId} → názvy: ${[...nazvy].join(", ")}`);
         }
     }
     if (!metaData) {
