@@ -2407,11 +2407,41 @@ app.get('/:config/stream/:type/:id.json', asyncRoute(async (req, res) => {
     const userKey = crypto.createHash("sha1").update(String(activeUid || "")).digest("hex").slice(0, 8);
     console.log(`\n====== 🎬 Hľadám (user: ${userKey}) | id='${id}' ======`);
 
-    const jeToSerialPodlaId = id.includes(":");
-    const [rawId, sRaw, eRaw] = id.split(":");
-    const seria = (jeToSerialPodlaId && sRaw) ? parseInt(sRaw) : undefined;
-    const epizoda = (jeToSerialPodlaId && eRaw) ? parseInt(eRaw) : undefined;
-    const vlastnyTyp = jeToSerialPodlaId ? "series" : "movie";
+    // Parsovanie ID — podporuje všetky formáty:
+    //   tt1234567           (movie)
+    //   tt1234567:1:1       (series, IMDb)
+    //   tmdb:295879:1:1     (series, AioMetadata)
+    //   tvdb:466037:1:1     (series, TVDB addon)
+    //   tvdb-466037:1:1     (series, TVDB addon variant)
+    const imdbMatch = id.match(/^(tt\d+)(?::(\d+):(\d+))?$/);
+    const tmdbMatch = id.match(/^tmdb:(\d+)(?::(\d+):(\d+))?$/);
+    const tvdbMatch = id.match(/^tvdb[-: ]?(\d+)(?::(\d+):(\d+))?$/);
+
+    let rawId, seria, epizoda, vlastnyTyp;
+    if (imdbMatch) {
+        rawId = imdbMatch[1];
+        seria = imdbMatch[2] ? parseInt(imdbMatch[2]) : undefined;
+        epizoda = imdbMatch[3] ? parseInt(imdbMatch[3]) : undefined;
+        vlastnyTyp = imdbMatch[2] ? "series" : "movie";
+    } else if (tmdbMatch) {
+        rawId = `tmdb:${tmdbMatch[1]}`;
+        seria = tmdbMatch[2] ? parseInt(tmdbMatch[2]) : undefined;
+        epizoda = tmdbMatch[3] ? parseInt(tmdbMatch[3]) : undefined;
+        vlastnyTyp = tmdbMatch[2] ? "series" : "movie";
+    } else if (tvdbMatch) {
+        rawId = `tvdb:${tvdbMatch[1]}`;
+        seria = tvdbMatch[2] ? parseInt(tvdbMatch[2]) : undefined;
+        epizoda = tvdbMatch[3] ? parseInt(tvdbMatch[3]) : undefined;
+        vlastnyTyp = tvdbMatch[2] ? "series" : "movie";
+    } else {
+        // Neznámy formát — spadneme na pôvodnú logiku (aspoň niečo)
+        const jeToSerialPodlaId = id.includes(":");
+        const [r, s, e] = id.split(":");
+        rawId = r;
+        seria = (jeToSerialPodlaId && s) ? parseInt(s) : undefined;
+        epizoda = (jeToSerialPodlaId && e) ? parseInt(e) : undefined;
+        vlastnyTyp = jeToSerialPodlaId ? "series" : "movie";
+    }
 
     // TVDB ID formát (z TVDB addonu / AioMetadata): tvdb-466037, tvdb:466037
     // alebo tvdb-466037:1:1. Cinemeta/TMDB takéto seriály často nepoznajú
