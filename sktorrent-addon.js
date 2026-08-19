@@ -760,6 +760,24 @@ async function pridajTvdbNazvy(nazvy, tvdbId, tvdbKey) {
     }));
 }
 
+// IMDb suggestion fallback — keď Cinemeta aj TMDB zlyhajú (nové/neznáme tituly).
+// IMDb suggestion API je verejné, bez kľúča: https://v2.sg.media-imdb.com/suggestion/t/<id>.json
+async function pridajImdbSuggestionNazov(nazvy, imdbId) {
+    if (!imdbId || !/^tt\d+$/.test(imdbId)) return false;
+    try {
+        const res = await axios.get(`https://v2.sg.media-imdb.com/suggestion/t/${imdbId}.json`, {
+            timeout: 4000
+        });
+        const item = res.data?.d?.[0];
+        if (item?.l && item.l.trim()) {
+            nazvy.add(item.l.trim());
+            logApi(`IMDb suggestion: ${item.l.trim()}`);
+            return true;
+        }
+    } catch (e) { /* ignore */ }
+    return false;
+}
+
 // TVDB fallback podľa IMDb ID — pre seriály, ktoré TMDB nepozná
 // (napr. nové SK/CZ relácie ako "Párty Shore Slovensko" — TMDB prázdne,
 // ale TVDB ich má). Search podľa imdbId → TVDB ID → preklady názvov.
@@ -887,6 +905,12 @@ async function ziskatVsetkyNazvyARok(imdbId, vlastnyTyp, tmdbKey, tvdbKey) {
         }
 
         if (!titleOriginal) titleOriginal = titleCz; 
+
+        // IMDb suggestion fallback — keď všetko zlyhalo (Cinemeta {}, TMDB nič,
+        // TVDB nič), aspoň anglický názov z IMDb (napr. "Dirty Shore" pre tt37432450)
+        if (nazvy.size === 0) {
+            await pridajImdbSuggestionNazov(nazvy, imdbId);
+        }
 
         const vysledokNazvy = [...nazvy].filter(Boolean).filter(t => !t.toLowerCase().startsWith("výsledky"));
         return { 
