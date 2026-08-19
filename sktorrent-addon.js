@@ -2272,7 +2272,7 @@ const handleManifest = (req, res) => {
         types: ["movie", "series"],
         catalogs: [],
         resources: ["stream"],
-        idPrefixes: ["tt"],
+        idPrefixes: ["tt", "tvdb-"],
         behaviorHints: {
             configurable: true,
             configurationRequired: false
@@ -2362,13 +2362,35 @@ app.get('/:config/stream/:type/:id.json', asyncRoute(async (req, res) => {
     console.log(`\n====== 🎬 Hľadám (user: ${userKey}) | id='${id}' ======`);
 
     const jeToSerialPodlaId = id.includes(":");
-    const [imdbId, sRaw, eRaw] = id.split(":");
+    const [rawId, sRaw, eRaw] = id.split(":");
     const seria = (jeToSerialPodlaId && sRaw) ? parseInt(sRaw) : undefined;
     const epizoda = (jeToSerialPodlaId && eRaw) ? parseInt(eRaw) : undefined;
     const vlastnyTyp = jeToSerialPodlaId ? "series" : "movie";
 
+    // TVDB ID formát (z TVDB addonu): tvdb-466037 alebo tvdb-466037:1:1
+    // Cinemeta/TMDB takéto seriály často nepoznajú (napr. Party Shore Slovensko),
+    // preto názvy načítame priamo z TVDB API podľa TVDB ID.
+    const tvdbIdMatch = rawId.match(/^tvdb-(\d+)$/);
+    const jeTvdbId = !!tvdbIdMatch;
+
     // 1. ZÍSKAME NÁZVY A ROK a META
-    const metaData = await ziskatVsetkyNazvyARok(imdbId, vlastnyTyp, userConfig.tmdb, userConfig.tvdb);
+    let metaData = null;
+    if (jeTvdbId) {
+        const tvdbId = tvdbIdMatch[1];
+        const nazvy = new Set();
+        await pridajTvdbNazvy(nazvy, tvdbId, userConfig.tvdb);
+        if (nazvy.size > 0) {
+            metaData = {
+                nazvy: [...nazvy],
+                rok: null,
+                meta: { titleOriginal: [...nazvy][0], titleCz: [...nazvy][0], yearStart: null, yearEnd: null }
+            };
+            logApi(`TVDB ID ${tvdbId} → názvy: ${[...nazvy].join(", ")}`);
+        }
+    }
+    if (!metaData) {
+        metaData = await ziskatVsetkyNazvyARok(rawId, vlastnyTyp, userConfig.tmdb, userConfig.tvdb);
+    }
     const suroveNazvy = metaData?.nazvy || [];
     const vydanyRok = metaData?.rok;
     const metaInfo = metaData?.meta;
@@ -2387,8 +2409,9 @@ app.get('/:config/stream/:type/:id.json', asyncRoute(async (req, res) => {
     const unikatneNazvy = [...new Set(zakladneNazvy)];
 
     // 2. ČSFD LINK — hľadáme podľa presného ČSFD URL (nájde aj tituly s odlišným SK/CZ názvom)
+    // Pre TVDB ID nemáme IMDb ID — ČSFD vynecháme, hľadáme priamo podľa názvu.
         const hlavnyNazov = metaData?.meta?.titleOriginal || unikatneNazvy[0];
-        const csfdLink = await ziskatCsfdUrl(imdbId, hlavnyNazov, vydanyRok, vlastnyTyp);
+        const csfdLink = jeTvdbId ? null : await ziskatCsfdUrl(rawId, hlavnyNazov, vydanyRok, vlastnyTyp);
     
     let torrenty = [];
     const videnieTorrentIds = new Set();
