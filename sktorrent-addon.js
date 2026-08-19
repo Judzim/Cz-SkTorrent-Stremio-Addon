@@ -2296,7 +2296,7 @@ const handleManifest = (req, res) => {
         types: ["movie", "series"],
         catalogs: [],
         resources: ["stream"],
-        idPrefixes: ["tt", "tvdb-"],
+        idPrefixes: ["tt", "tvdb-", "tvdb:"],
         behaviorHints: {
             configurable: true,
             configurationRequired: false
@@ -2391,10 +2391,10 @@ app.get('/:config/stream/:type/:id.json', asyncRoute(async (req, res) => {
     const epizoda = (jeToSerialPodlaId && eRaw) ? parseInt(eRaw) : undefined;
     const vlastnyTyp = jeToSerialPodlaId ? "series" : "movie";
 
-    // TVDB ID formát (z TVDB addonu): tvdb-466037 alebo tvdb-466037:1:1
-    // Cinemeta/TMDB takéto seriály často nepoznajú (napr. Party Shore Slovensko),
-    // preto názvy načítame priamo z TVDB API podľa TVDB ID.
-    const tvdbIdMatch = rawId.match(/^tvdb-(\d+)$/);
+    // TVDB ID formát (z TVDB addonu / AioMetadata): tvdb-466037, tvdb:466037
+    // alebo tvdb-466037:1:1. Cinemeta/TMDB takéto seriály často nepoznajú
+    // (napr. Party Shore Slovensko), preto názvy načítame priamo z TVDB API.
+    const tvdbIdMatch = rawId.match(/^tvdb[-: ]?(\d+)$/);
     const jeTvdbId = !!tvdbIdMatch;
 
     // 1. ZÍSKAME NÁZVY A ROK a META
