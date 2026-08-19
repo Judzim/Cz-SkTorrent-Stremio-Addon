@@ -1,6 +1,6 @@
 {
   "name": "org.stremio.sktorrent.addon",
-  "version": "2.0.0",
+  "version": "2.0.1",
   "description": "SKTorrent addon so serverovym prehravanim a TorBox",
   "main": "sktorrent-addon.js",
   "scripts": {
