@@ -15,7 +15,7 @@ Addon si môžeš nainštalovať a nakonfigurovať na tejto verejne bežiacej in
 ## ⭐ Hlavné funkcie a vlastnosti
 
 *   ⚡ **Podpora Debrid služieb (TorBox / Real-Debrid)**: Addon podporuje TorBox aj Real-Debrid. Po vložení API kľúča automaticky overí, či je torrent už cachovaný na serveroch danej služby. Cachované streamy sa prehrávajú okamžite, necachované sa automaticky stiahnu. Výber providera (P2P / TorBox / Real-Debrid) sa robí v konfigurácii.
-*   🔍 **Vyhľadávanie cez ČSFD a viacero názvov**: Addon automaticky scrapuje ČSFD pre získanie presného českého/slovenského názvu filmu alebo seriálu. Ak nájde ČSFD odkaz, prehľadáva SKTorrent až do 20 stránok výsledkov pre istotu nájdenia aj starších epizód. Doplnkovo sťahuje názvy z TMDB (originálne aj preložené do CS/SK/EN) a TVDB, čím maximalizuje šancu na zhodu.
+*   🔍 **Vyhľadávanie cez ČSFD a viacero názvov**: Addon automaticky scrapuje ČSFD pre získanie presného českého/slovenského názvu filmu alebo seriálu. Ak nájde ČSFD odkaz, prehľadáva SKTorrent na 2 stránkach výsledkov pre istotu nájdenia aj starších epizód. Doplnkovo sťahuje názvy z TMDB (originálne aj preložené do CS/SK/EN) a TVDB, čím maximalizuje šancu na zhodu.
 *   🧠 **Pokročilý Regex pre SK/CZ seriály**: Rozpoznáva obrovské množstvo našských formátov seriálov (napr. `S01E01`, `1x01`, `1. - 4. serie`, `1. Epizoda`, `105.Epizóda`, `Pack`, `Komplet`). Automaticky extrahuje správny video súbor aj z veľkých gigabajtových packov.
 *   🎥 **Detailné informácie o streame**: Priamo v Stremio vidíš krásne naformátované dáta:
     *   **Kvalita & Formát:** 4K, 1080p, HDR, Dolby Vision, HEVC, H.264, Atmos...
@@ -62,7 +62,7 @@ Pri zapnutom debrid providerovi (TorBox / Real-Debrid) majú streamy v Stremiu p
 | `[⏳]` | **Necachovaný** — torrent sa práve sťahuje na servery; prehratie sa spustí po dokončení |
 | `[❌]` | **Blokovaný** (iba Real-Debrid) — Real-Debrid blokuje názvy obsahujúce určité reťazce (napr. `BDRip`, `WEB-DL`, `RARBG`, `YTS`). Tieto streamy sa nedajú prehrať cez RD a sú automaticky presunuté na koniec radenia |
 
-Cache status kontrolujeme cez **StremThru proxy** — batch request na RD API (`GET /magnets/check`). Problém: StremThru DHT nie je 100% spoľahlivý, niekedy vráti `"unknown"` (⏳) aj keď torrent na RD serveroch reálne je. Vtedy ho play handler pošle do RD, ktorý ho nájde a streamuje — na druhý krát už cache check vráti `"cached"` (⚡). Cache status je globálny, nie viazaný na konkrétny API kľúč.
+Cache status kontrolujeme cez **lokálnu zdieľanú cache** (`rd_cache.json`) — hashe úspešne prehratých/stiahnutých torrentov všetkých userov + refresh z RD účtu (`GET /torrents`, status `downloaded`, max 1× za 5 min). Problém: refresh nie je 100% spoľahlivý, niekedy vráti `"unknown"` (⏳) aj keď torrent na RD serveroch reálne je. Vtedy ho play handler pošle do RD, ktorý ho nájde a streamuje — na druhý krát už cache check vráti `"cached"` (⚡). Cache status je globálny, nie viazaný na konkrétny API kľúč.
 
 ---
 

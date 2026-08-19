@@ -39,5 +39,7 @@ build/
 # Torrenty, ak by si testoval manuálne
 *.torrent
 
+# RD cache databáza (zdieľaná medzi userov — runtime, nepatrí do gitu)
+rd_cache.json
 
 cloudflared.deb

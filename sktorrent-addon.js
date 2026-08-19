@@ -1283,6 +1283,10 @@ function maskConfigVUrl(url) {
 const asyncRoute = (fn) => (req, res, next) => Promise.resolve(fn(req, res, next)).catch(next);
 
 app.use((req, res, next) => {
+    // Referer nesmie uniknút na CDN/debrid — URL obsahuje base64 config s
+    // uid/pass/debrid kľúčmi usera. Bez tejto hlavičky by CDN videlo kľúče
+    // v Referer hlavičke pri 302 redirecte (play/download).
+    res.setHeader('Referrer-Policy', 'no-referrer');
     console.log(`\n======================================================`);
     console.log(`[${getTime()}] 🌍 [HTTP REQUEST] -> ${req.method} ${maskConfigVUrl(req.originalUrl)}`);
     console.log(`[${getTime()}] 📡 IP: ${req.ip} | User-Agent: ${req.headers['user-agent']?.substring(0, 50)}...`);
