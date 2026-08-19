@@ -2288,7 +2288,7 @@ const handleManifest = (req, res) => {
 
     res.json({
         id: "org.stremio.sktorrent.addon", 
-        version: "2.0.0",
+        version: "2.0.1",
         name: "TorrentSK",
         description: "SKTorrent s TorBox prehrávaním, ČSFD a metadátami",
         logo: `${PUBLIC_URL}/logo.png`,
