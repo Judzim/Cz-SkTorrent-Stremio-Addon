@@ -2413,9 +2413,10 @@ app.get('/:config/stream/:type/:id.json', asyncRoute(async (req, res) => {
     //   tmdb:295879:1:1     (series, AioMetadata)
     //   tvdb:466037:1:1     (series, TVDB addon)
     //   tvdb-466037:1:1     (series, TVDB addon variant)
+    //   tvdb:466037:official:1:1  (series, TVDB addon — oficiálny formát s 'official')
     const imdbMatch = id.match(/^(tt\d+)(?::(\d+):(\d+))?$/);
     const tmdbMatch = id.match(/^tmdb:(\d+)(?::(\d+):(\d+))?$/);
-    const tvdbMatch = id.match(/^tvdb[-: ]?(\d+)(?::(\d+):(\d+))?$/);
+    const tvdbMatch = id.match(/^tvdb[-: ]?(\d+)(?::official)?(?::(\d+):(\d+))?$/);
 
     let rawId, seria, epizoda, vlastnyTyp;
     if (imdbMatch) {
