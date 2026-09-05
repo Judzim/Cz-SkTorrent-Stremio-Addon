@@ -724,7 +724,8 @@ function parseYearRange(y) {
 let tvdbTokenCache = { token: null, expiresAt: 0 };
 
 async function getTvdbToken(tvdbKey) {
-    if (tvdbKey && tvdbTokenCache.token && Date.now() < tvdbTokenCache.expiresAt - 60000) {
+    if (!tvdbKey) return null;
+    if (tvdbTokenCache.token && Date.now() < tvdbTokenCache.expiresAt - 60000) {
         return tvdbTokenCache.token;
     }
     try {
@@ -758,6 +759,19 @@ async function pridajTvdbNazvy(nazvy, tvdbId, tvdbKey) {
             }
         } catch (e) { /* translation not found for this lang, skip */ }
     }));
+}
+
+async function pridajTmdbNazvyPodlaTvdb(nazvy, tvdbId, tmdbKey) {
+    if (!tmdbKey || !/^\d+$/.test(String(tvdbId || ""))) return;
+    const tmdbId = await withCache(`tmdb_id_by_tvdb:${tvdbId}`, 21600000, async () => {
+        const res = await axios.get(`https://api.themoviedb.org/3/find/${tvdbId}`, {
+            params: { api_key: tmdbKey, external_source: "tvdb_id" },
+            timeout: 4000
+        });
+        return res.data?.tv_results?.[0]?.id || null;
+    });
+    if (!tmdbId) return;
+    await pridajTmdbNazvy(nazvy, tmdbId, tmdbKey);
 }
 
 // IMDb suggestion fallback — keď Cinemeta aj TMDB zlyhajú (nové/neznáme tituly).
@@ -946,6 +960,44 @@ async function ziskatVsetkyNazvyARok(imdbId, vlastnyTyp, tmdbKey, tvdbKey) {
 // ===================================================================
 // Hľadanie a spracovanie Torrentov
 // ===================================================================
+function buildEpisodeSearchQueries(type, titles, season, episode) {
+    if (type !== "series" || !Number.isInteger(season) || season < 0 ||
+        !Number.isInteger(episode) || episode < 0) {
+        return [];
+    }
+
+    const seasonStr = String(season).padStart(2, "0");
+    const episodeStr = String(episode).padStart(2, "0");
+    const uniqueTitles = [];
+    const seenTitles = new Set();
+
+    for (const value of Array.isArray(titles) ? titles : [titles]) {
+        const title = String(value || "").trim().replace(/\s+/g, " ");
+        if (!title) continue;
+
+        // Metadáta môžu obsahovať príponu série alebo epizódy. Odstránime ju,
+        // aby sa po pridaní požadovanej prípony neopakovala.
+        const baseTitle = title
+            .replace(/\bS\d{1,2}[._-]?E\d{1,3}\b/ig, "")
+            .replace(/\bS\d{1,2}\b/ig, "")
+            .trim()
+            .replace(/\s+/g, " ");
+        if (!baseTitle) continue;
+
+        const key = baseTitle.toLocaleLowerCase();
+        if (seenTitles.has(key)) continue;
+        seenTitles.add(key);
+        uniqueTitles.push(baseTitle);
+        if (uniqueTitles.length === 2) break;
+    }
+
+    // Najprv presné dotazy epizódy, potom dotazy série pre balíky a rozsahy.
+    return [
+        ...uniqueTitles.map(title => `${title} S${seasonStr}E${episodeStr}`),
+        ...uniqueTitles.map(title => `${title} S${seasonStr}`)
+    ];
+}
+
 async function hladatTorrenty(dotaz, userAxios, maxPages = 1, userKey = "") {
     if (!dotaz || dotaz.trim().length < 2) return [];
     
@@ -2445,8 +2497,8 @@ app.get('/:config/stream/:type/:id.json', asyncRoute(async (req, res) => {
     }
 
     // TVDB ID formát (z TVDB addonu / AioMetadata): tvdb-466037, tvdb:466037
-    // alebo tvdb-466037:1:1. Cinemeta/TMDB takéto seriály často nepoznajú
-    // (napr. Party Shore Slovensko), preto názvy načítame priamo z TVDB API.
+    // alebo tvdb-466037:1:1. Názov získame cez používateľov TVDB kľúč,
+    // prípadne cez mapovanie externého ID s používateľovým TMDB kľúčom.
     const tvdbIdMatch = rawId.match(/^tvdb[-: ]?(\d+)$/);
     const jeTvdbId = !!tvdbIdMatch;
 
@@ -2460,6 +2512,7 @@ app.get('/:config/stream/:type/:id.json', asyncRoute(async (req, res) => {
         const tvdbId = tvdbIdMatch[1];
         const nazvy = new Set();
         await pridajTvdbNazvy(nazvy, tvdbId, userConfig.tvdb);
+        if (nazvy.size === 0) await pridajTmdbNazvyPodlaTvdb(nazvy, tvdbId, activeTmdb);
         if (nazvy.size > 0) {
             metaData = {
                 nazvy: [...nazvy],
@@ -2525,6 +2578,17 @@ app.get('/:config/stream/:type/:id.json', asyncRoute(async (req, res) => {
         }
     };
 
+    // Presné episode/season dotazy sprístupnia staršie epizódy bez zvyšovania
+    // globálneho počtu stránok. Najviac dva názvy = najviac štyri 1-page requesty.
+    if (aplikaciaTyp === "series" && vlastnyTyp === "series") {
+        const episodeTitles = unikatneNazvy.map(nazov => odstranDiakritiku(nazov));
+        const episodeQueries = buildEpisodeSearchQueries("series", episodeTitles, seria, epizoda);
+        const episodeResults = await Promise.all(episodeQueries.map(d =>
+            hladatTorrenty(d, userAxios, 1, userKey)
+        ));
+        episodeQueries.forEach((d, i) => spracujVysledky(d, episodeResults[i] || []));
+    }
+
     // ── BATCH 1: CSFD URL + primárny názov (max 2 query, paralelne) ──
     // SKTorrent search je čistý substring search — primárny názov (bez diakritiky)
     // nájde pack aj epizódy, správnu epizódu vyberie client-side filter.
@@ -2537,12 +2601,13 @@ app.get('/:config/stream/:type/:id.json', asyncRoute(async (req, res) => {
         hladatTorrenty(d, userAxios, 2, userKey)
     ));
     prveDotazy.forEach((d, i) => spracujVysledky(d, vysledkyBatch[i] || []));
+    const batchNasielTorrenty = vysledkyBatch.some(vysledky => Array.isArray(vysledky) && vysledky.length > 0);
 
     // ── FALLBACK: len ak batch 1 nič nenašiel ──
     // Kratšie názvy (3 slová) a ostatné jazykové varianty — ale NIE epizódové tagy
     // (sú vždy podmnožina základného názvu) a nie generické jednoslovné query
     // (vracajú garbage — napr. "Odysea" → 36 irelevantných torrentov).
-    if (torrenty.length === 0) {
+    if (!batchNasielTorrenty) {
         const fallback = [];
         unikatneNazvy.forEach(z => {
             const bezDia = odstranDiakritiku(z).trim();
